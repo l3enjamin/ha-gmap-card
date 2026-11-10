@@ -1,0 +1,27 @@
+{
+  "name": "ha-gmap-card",
+  "version": "1.0.0",
+  "description": "High-performance, modern Google Maps Lovelace card for Home Assistant",
+  "type": "module",
+  "main": "dist/ha-gmap-card.js",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile dist/ha-gmap-card.js --minify --target browser",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "google-maps"
+  ],
+  "author": "l3enjamin",
+  "license": "MIT",
+  "dependencies": {
+    "lit": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/google.maps": "^3.58.1",
+    "typescript": "^5.7.0"
+  }
+}
