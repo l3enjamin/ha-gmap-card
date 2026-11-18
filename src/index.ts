@@ -1,7 +1,11 @@
 import { HaGmapCard } from "./card";
+import { HaGmapCardEditor } from "./editor";
 
 if (!customElements.get("ha-gmap-card")) {
   customElements.define("ha-gmap-card", HaGmapCard);
+}
+if (!customElements.get("ha-gmap-card-editor")) {
+  customElements.define("ha-gmap-card-editor", HaGmapCardEditor);
 }
 
 // Register with Home Assistant Lovelace Card Picker
@@ -9,7 +13,7 @@ if (!customElements.get("ha-gmap-card")) {
 (window as any).customCards.push({
   type: "ha-gmap-card",
   name: "Google Maps Card (Modern)",
-  description: "High-performance, lightweight vector Google Maps card with transit motion and custom filters.",
+  description: "High-performance, lightweight vector Google Maps card with GTFS2 transit motion, custom markers, and filters.",
   preview: true
 });
 
@@ -19,4 +23,4 @@ console.info(
   "color: #1a73e8; background: #e8f0fe; font-weight: 700; border-radius: 0 3px 3px 0;"
 );
 
-export { HaGmapCard };
+export { HaGmapCard, HaGmapCardEditor };

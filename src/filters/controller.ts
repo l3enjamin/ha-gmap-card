@@ -130,8 +130,10 @@ export class FilterController {
       const chk = document.createElement("input");
       chk.type = "checkbox";
       chk.checked = this.isFilterActive(id);
-      chk.style.cssText = "width: 16px; height: 16px; margin: 0; cursor: pointer;";
+      chk.style.cssText = `width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: ${grp.color || "var(--primary-color, #1a73e8)"}; flex-shrink: 0;`;
 
+      row.addEventListener("click", (e) => e.stopPropagation());
+      chk.addEventListener("click", (e) => e.stopPropagation());
       chk.addEventListener("change", (e) => {
         e.stopPropagation();
         this.setFilter(id, chk.checked);
