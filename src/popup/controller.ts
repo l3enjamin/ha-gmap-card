@@ -154,8 +154,8 @@ export class PopupController {
         try {
           const cfgCopy = JSON.parse(
             JSON.stringify(cardCfg)
-              .replace(/this\.entity_id/g, entityConfig.entityId)
-              .replace(/this\.entity/g, entityConfig.entityId)
+              .replace(/\bthis\.entity_id\b/g, entityConfig.entityId)
+              .replace(/\bthis\.entity\b/g, entityConfig.entityId)
           );
           const cardEl = helpers.createCardElement(cfgCopy);
           cardEl.hass = this.hass;

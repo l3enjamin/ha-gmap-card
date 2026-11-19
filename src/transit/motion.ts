@@ -186,6 +186,14 @@ export class TransitMotionEngine {
     } else if (!nextCfg.scheduleUrl) {
       this.loadedUrl = null;
       this.schedule = null;
+      for (const marker of this.scheduledMarkers.values()) {
+        try {
+          if (typeof marker.setMap === "function") marker.setMap(null);
+          else marker.map = null;
+        } catch (_) {}
+      }
+      this.scheduledMarkers.clear();
+      this.activeTrips.clear();
     }
     this.updateVisibility();
   }

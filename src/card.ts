@@ -5,7 +5,7 @@ import { loadGoogleMaps } from "./maps/loader";
 import { createDomMarkerOverlay, createMarkerElement } from "./maps/marker-content";
 import { PopupController } from "./popup/controller";
 import { resolveMdiIconDataUrl, TransitMotionEngine } from "./transit/motion";
-import { extractRouteKeys } from "./transit/schedule";
+import { extractRouteKeys, matchEntityPattern } from "./transit/schedule";
 
 const geoJsonCache = new Map<string, Promise<any>>();
 
@@ -310,12 +310,15 @@ export class HaGmapCard extends LitElement {
 
         // Transit motion engine
         if (this._config.transitMotion.enabled) {
+          const getEntityConfigs = () => this._config.entities;
           this._transitMotion = new TransitMotionEngine(
             this._google.maps,
             this._map,
             this._config.transitMotion,
             {
-              entityConfigs: this._config.entities,
+              get entityConfigs() {
+                return getEntityConfigs();
+              },
               entityMarkers: this._markers,
               routePolylines: this._routePolylines,
               isEntityFilterActive: (entityId: string) => {
@@ -647,53 +650,70 @@ export class HaGmapCard extends LitElement {
 
     for (const ent of this._config.entities) {
       if (!ent.entityId) continue;
-      const stateObj = this._hass.states[ent.entityId];
-      if (!stateObj) continue;
+      const isPattern =
+        ent.entityId.includes("*") ||
+        ent.entityId.includes("?") ||
+        (ent.entityId.startsWith("/") && ent.entityId.lastIndexOf("/") > 0);
+      const matchedIds = this._hass.states[ent.entityId]
+        ? [ent.entityId]
+        : isPattern
+          ? Object.keys(this._hass.states).filter((id) => matchEntityPattern(id, ent.entityId))
+          : [];
 
-      const lat = Number(stateObj.attributes?.latitude);
-      const lng = Number(stateObj.attributes?.longitude);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-
-      activeEntityIds.add(ent.entityId);
-      this._markerConfigs.set(ent.entityId, ent);
-
-      const minZ = this._transitMotion?.getEntityMinZoom(ent.entityId) ?? ent.minZoom ?? null;
-      const zoomOk = minZ === null ? true : zoom >= minZ;
-      const filterOk = this.isEntityFilterActive(ent);
-      const shouldShow = filterOk && zoomOk;
-
-      let marker = this._markers.get(ent.entityId);
-      if (!marker) {
-        const contentEl = createMarkerElement(ent, stateObj, isDark);
-        const position = { lat, lng };
-        const title = ent.name || stateObj.attributes?.friendly_name || ent.entityId;
-
-        if (this._config.mapId && this._google.maps.marker?.AdvancedMarkerElement) {
-          marker = new this._google.maps.marker.AdvancedMarkerElement({
-            map: shouldShow ? this._map : null,
-            position,
-            content: contentEl,
-            title
-          });
-        } else {
-          marker = createDomMarkerOverlay(this._google.maps, this._map, position, contentEl, title);
-          marker.setVisible(shouldShow);
+      for (const resolvedId of matchedIds) {
+        const stateObj = this._hass.states[resolvedId];
+        if (!stateObj) continue;
+        if (ent.nameFilter) {
+          const friendlyName = String(stateObj.attributes?.friendly_name || resolvedId);
+          if (!matchEntityPattern(friendlyName, ent.nameFilter)) continue;
         }
+        const resolvedEnt = resolvedId === ent.entityId ? ent : { ...ent, entityId: resolvedId };
 
-        const eid = ent.entityId;
-        marker.addListener("click", () => {
-          const latestState = this._hass?.states?.[eid] || stateObj;
-          const latestCfg = this._markerConfigs.get(eid) || ent;
-          this._popupController?.open(this._map, marker, latestCfg, latestState, this.isDarkMode());
-        });
+        const lat = Number(stateObj.attributes?.latitude);
+        const lng = Number(stateObj.attributes?.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
-        this._markers.set(ent.entityId, marker);
-      } else {
-        const newPos = { lat, lng };
-        if (typeof marker.setPosition === "function") marker.setPosition(newPos);
-        else marker.position = newPos;
-        if (typeof marker.setVisible === "function") marker.setVisible(shouldShow);
-        else marker.map = shouldShow ? this._map : null;
+        activeEntityIds.add(resolvedEnt.entityId);
+        this._markerConfigs.set(resolvedEnt.entityId, resolvedEnt);
+
+        const minZ = this._transitMotion?.getEntityMinZoom(resolvedEnt.entityId) ?? resolvedEnt.minZoom ?? null;
+        const zoomOk = minZ === null ? true : zoom >= minZ;
+        const filterOk = this.isEntityFilterActive(resolvedEnt);
+        const shouldShow = filterOk && zoomOk;
+
+        let marker = this._markers.get(resolvedEnt.entityId);
+        if (!marker) {
+          const contentEl = createMarkerElement(resolvedEnt, stateObj, isDark);
+          const position = { lat, lng };
+          const title = resolvedEnt.name || stateObj.attributes?.friendly_name || resolvedEnt.entityId;
+
+          if (this._config.mapId && this._google.maps.marker?.AdvancedMarkerElement) {
+            marker = new this._google.maps.marker.AdvancedMarkerElement({
+              map: shouldShow ? this._map : null,
+              position,
+              content: contentEl,
+              title
+            });
+          } else {
+            marker = createDomMarkerOverlay(this._google.maps, this._map, position, contentEl, title);
+            marker.setVisible(shouldShow);
+          }
+
+          const eid = resolvedEnt.entityId;
+          marker.addListener("click", () => {
+            const latestState = this._hass?.states?.[eid] || stateObj;
+            const latestCfg = this._markerConfigs.get(eid) || resolvedEnt;
+            this._popupController?.open(this._map, marker, latestCfg, latestState, this.isDarkMode());
+          });
+
+          this._markers.set(resolvedEnt.entityId, marker);
+        } else {
+          const newPos = { lat, lng };
+          if (typeof marker.setPosition === "function") marker.setPosition(newPos);
+          else marker.position = newPos;
+          if (typeof marker.setVisible === "function") marker.setVisible(shouldShow);
+          else marker.map = shouldShow ? this._map : null;
+        }
       }
     }
 
