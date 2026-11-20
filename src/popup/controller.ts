@@ -230,8 +230,13 @@ export class PopupController {
     }
 
     infoWindow.setContent(container);
-    const isOverlay = typeof anchor?.getPanes === "function";
-    if (isOverlay && typeof anchor?.getPosition === "function") {
+    const isNativeMarker =
+      typeof anchor?.getIcon === "function" ||
+      Boolean(
+        this.googleMaps?.marker?.AdvancedMarkerElement &&
+          anchor instanceof this.googleMaps.marker.AdvancedMarkerElement
+      );
+    if (!isNativeMarker && typeof anchor?.getPosition === "function") {
       infoWindow.setPosition(anchor.getPosition());
       infoWindow.open({ map, shouldFocus: false });
     } else {

@@ -72,6 +72,7 @@ export interface TransitMotionConfig {
   busMatch: string[] | null;
   scheduleUrl?: string;
   filterGroup?: string;
+  simulate247: boolean;
   vehicles: Record<string, string>;
   routes: Record<string, TransitRouteConfig>;
 }
@@ -260,6 +261,7 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
     busMatch,
     scheduleUrl: tmRaw?.schedule_url || tmRaw?.scheduleUrl || cfg.transit_schedule || "/local/gtfs2/transit_schedule.json",
     filterGroup: tmRaw?.filter_group || tmRaw?.filterGroup || tmRaw?.group || "vehicles",
+    simulate247: Boolean(tmRaw?.simulate_24_7 ?? tmRaw?.simulate247 ?? false),
     vehicles,
     routes
   };

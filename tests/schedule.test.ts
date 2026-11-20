@@ -87,7 +87,7 @@ describe("Transit Schedule Pure Logic", () => {
     expect(activeFiltered[0].lineKey).toBe("canada");
   });
 
-  it("falls back to 24/7 daytime simulation when overnight matchedCount is 0", async () => {
+  it("returns empty when system is closed at 1:44am by default, and supports opt-in simulate247 or post-midnight trips", async () => {
     const mod = await import("../src/transit/schedule");
     const schedule = {
       profiles: [
@@ -107,15 +107,28 @@ describe("Transit Schedule Pure Logic", () => {
       }
     };
 
-    // Compute a secNow whose wrapped effSec falls inside [28800, 30600]:
-    // secNow = 3600 -> ((3600 - 18300) % 54000 + 54000) % 54000 + 25200 = 39300 + 25200 = 64500
-    // Pick 03:30:00 AM? Wrap formula: ((floor(secNow) - 18300) % 54000 + 54000) % 54000 + 25200
-    // If secNow = 22800 (06:20 AM): ((22800 - 18300) + 25200) = 29700 -> inside [28800, 30600]!
-    // On Sunday 06:20 AM (serviceId = "3" has no trips -> matchedCount = 0)
+    // Closed at 1:44 AM -> returns [] when simulate247 is off
+    const lateNight = new Date(2026, 10, 20, 1, 44, 0, 0);
+    expect(mod.findActiveScheduledTrips(schedule, lateNight).length).toBe(0);
+
+    // Opt-in simulate247: true simulates daytime trips
     const sundayEarly = new Date(2026, 10, 15, 6, 20, 0, 0);
-    const active = mod.findActiveScheduledTrips(schedule, sundayEarly);
-    expect(active.length).toBe(1);
-    expect(active[0].simOffset).toBe(29700 - 22800);
+    const activeSim = mod.findActiveScheduledTrips(schedule, sundayEarly, undefined, { simulate247: true });
+    expect(activeSim.length).toBe(1);
+    expect(activeSim[0].simOffset).toBe(29700 - 22800);
+
+    // Post-midnight GTFS trip (e.g. Friday 01:44 AM -> Thursday serviceId "1", secNow = 92640)
+    const postMidnightSchedule = {
+      profiles: schedule.profiles,
+      trips: {
+        canada: {
+          "1": [[91800, 0]] as [number, number][] // 25:30:00 -> 26:00:00
+        }
+      }
+    };
+    const activeLate = mod.findActiveScheduledTrips(postMidnightSchedule, lateNight);
+    expect(activeLate.length).toBe(1);
+    expect(activeLate[0].simOffset).toBe(0);
   });
 
   it("snaps and advances bus coordinates along GeoJSON LineString polylines", async () => {

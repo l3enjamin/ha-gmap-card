@@ -98,19 +98,19 @@ export function interpolateTripPosition(
 export function findActiveScheduledTrips(
   schedule: TransitSchedule | null | undefined,
   date: Date,
-  routesCfg?: Record<string, TransitRouteConfig>
+  routesCfg?: Record<string, TransitRouteConfig>,
+  options?: { simulate247?: boolean; rolloverHour?: number }
 ): ActiveScheduledTrip[] {
   if (!schedule || !Array.isArray(schedule.profiles) || !schedule.trips || Array.isArray(schedule.trips)) {
     return [];
   }
 
-  const day = date.getDay();
-  const serviceId = day === 0 ? "3" : day === 6 ? "2" : "1";
-  const secNow =
-    date.getHours() * 3600 +
-    date.getMinutes() * 60 +
-    date.getSeconds() +
-    date.getMilliseconds() / 1000;
+  const rollover = options?.rolloverHour ?? 3.5;
+  const hours = date.getHours();
+  const isPostMidnight = hours < rollover;
+  const serviceDay = isPostMidnight ? (date.getDay() + 6) % 7 : date.getDay();
+  const serviceId = serviceDay === 0 ? "3" : serviceDay === 6 ? "2" : "1";
+  const secNow = resolveServiceDaySeconds(date, { rolloverHour: rollover });
 
   const tripsByLine = schedule.trips;
   const lineKeys = Object.keys(tripsByLine).filter((lineKey) => {
@@ -133,6 +133,10 @@ export function findActiveScheduledTrips(
         matchedCount++;
       }
     }
+  }
+
+  if (matchedCount === 0 && !options?.simulate247) {
+    return [];
   }
 
   const effSec =

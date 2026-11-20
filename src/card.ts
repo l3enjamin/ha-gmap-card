@@ -2,7 +2,7 @@ import { css, html, LitElement, PropertyValues } from "lit";
 import { CardEntityConfig, GeoJsonLayerConfig, NormalizedCardConfig, normalizeCardConfig } from "./config/schema";
 import { FilterController } from "./filters/controller";
 import { loadGoogleMaps } from "./maps/loader";
-import { createDomMarkerOverlay, createMarkerElement } from "./maps/marker-content";
+import { BatchedDomMarkerLayer, createMarkerElement } from "./maps/marker-content";
 import { PopupController } from "./popup/controller";
 import { resolveMdiIconDataUrl, TransitMotionEngine } from "./transit/motion";
 import { extractRouteKeys, matchEntityPattern } from "./transit/schedule";
@@ -30,7 +30,10 @@ export class HaGmapCard extends LitElement {
   private _google: any = null;
   private _markers = new Map<string, any>();
   private _markerConfigs = new Map<string, CardEntityConfig>();
+  private _lastEntityState = new Map<string, any>();
+  private _domMarkerLayer: BatchedDomMarkerLayer | null = null;
   private _geoLayers = new Map<string, any>();
+  private _geoIconCache = new Map<string, any>();
   private _routePolylines = new Map<string, number[][][]>();
   private _popupController: PopupController | null = null;
   private _filterController: FilterController | null = null;
@@ -40,6 +43,7 @@ export class HaGmapCard extends LitElement {
   private _initialCenterApplied = false;
   private _initialFitDone = false;
   private _geoSignature = "";
+  private _lastWildcardScanMs = 0;
   private _initPromise: Promise<void> | null = null;
 
   static styles = css`
@@ -142,8 +146,31 @@ export class HaGmapCard extends LitElement {
       }
     }
 
-    this.updateEntityMarkers();
-    this.followEntitiesIfConfigured();
+    if (!this._map || !this._config) return;
+
+    let shouldUpdate = this._markers.size === 0 && this._config.entities.length > 0;
+    if (!shouldUpdate) {
+      const now = Date.now();
+      let hasWildcard = false;
+      for (const ent of this._config.entities) {
+        const eid = ent.entityId;
+        if (!eid) continue;
+        if (eid.includes("*") || eid.includes("?") || (eid.startsWith("/") && eid.lastIndexOf("/") > 0)) {
+          hasWildcard = true;
+        } else if (this._lastEntityState.get(eid) !== hass?.states?.[eid]) {
+          shouldUpdate = true;
+          break;
+        }
+      }
+      if (!shouldUpdate && hasWildcard && now - this._lastWildcardScanMs > 5000) {
+        shouldUpdate = true;
+      }
+    }
+
+    if (shouldUpdate) {
+      this.updateEntityMarkers();
+      this.followEntitiesIfConfigured();
+    }
   }
 
   public getCardSize(): number {
@@ -186,7 +213,13 @@ export class HaGmapCard extends LitElement {
     }
     this._markers.clear();
     this._markerConfigs.clear();
+    this._lastEntityState.clear();
+    if (this._domMarkerLayer) {
+      this._domMarkerLayer.destroy();
+      this._domMarkerLayer = null;
+    }
     this.clearGeoJsonLayers();
+    this._geoIconCache.clear();
     if (this._trafficLayer) {
       try {
         this._trafficLayer.setMap(null);
@@ -285,6 +318,7 @@ export class HaGmapCard extends LitElement {
         }
 
         this._map = new this._google.maps.Map(container, mapOptions);
+        this._domMarkerLayer = new BatchedDomMarkerLayer(this._google.maps, this._map);
         this._popupController = new PopupController(this._google.maps);
         this._popupController.setHass(this._hass);
 
@@ -564,12 +598,18 @@ export class HaGmapCard extends LitElement {
         `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}'>` +
         `<rect width='24' height='24' rx='4' fill='${sColor}'/>` +
         `<path d='M4.5 6.5h15v3h-5.7v9h-3.6v-9H4.5v-3z' fill='#FFFFFF'/></svg>`;
-      return {
-        icon: {
+      const cacheKey = `station_t|${sColor}|${sz}`;
+      let iconObj = this._geoIconCache.get(cacheKey);
+      if (!iconObj) {
+        iconObj = {
           url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(tSvg),
           scaledSize: new this._google.maps.Size(sz, sz),
           anchor: new this._google.maps.Point(sz / 2, sz / 2)
-        },
+        };
+        this._geoIconCache.set(cacheKey, iconObj);
+      }
+      return {
+        icon: iconObj,
         title,
         clickable
       };
@@ -607,15 +647,22 @@ export class HaGmapCard extends LitElement {
       }
     }
 
-    return {
-      icon: {
+    const fillC = feature.getProperty("color") || sColor;
+    const dotKey = `dot|${fillC}`;
+    let dotIcon = this._geoIconCache.get(dotKey);
+    if (!dotIcon) {
+      dotIcon = {
         path: this._google.maps.SymbolPath.CIRCLE,
         scale: 2.2,
-        fillColor: feature.getProperty("color") || sColor,
+        fillColor: fillC,
         fillOpacity: 0.95,
         strokeColor: "#ffffff",
         strokeWeight: 0.6
-      },
+      };
+      this._geoIconCache.set(dotKey, dotIcon);
+    }
+    return {
+      icon: dotIcon,
       title,
       clickable
     };
@@ -644,9 +691,11 @@ export class HaGmapCard extends LitElement {
   private updateEntityMarkers() {
     if (!this._map || !this._google || !this._hass) return;
 
+    this._lastWildcardScanMs = Date.now();
     const isDark = this.isDarkMode();
     const activeEntityIds = new Set<string>();
     const zoom = typeof this._map.getZoom === "function" ? this._map.getZoom() : 15;
+    let membershipChanged = false;
 
     for (const ent of this._config.entities) {
       if (!ent.entityId) continue;
@@ -676,17 +725,25 @@ export class HaGmapCard extends LitElement {
         activeEntityIds.add(resolvedEnt.entityId);
         this._markerConfigs.set(resolvedEnt.entityId, resolvedEnt);
 
+        const prevState = this._lastEntityState.get(resolvedEnt.entityId);
+        const existingMarker = this._markers.get(resolvedEnt.entityId);
+        if (existingMarker && prevState === stateObj) {
+          continue;
+        }
+        this._lastEntityState.set(resolvedEnt.entityId, stateObj);
+
         const minZ = this._transitMotion?.getEntityMinZoom(resolvedEnt.entityId) ?? resolvedEnt.minZoom ?? null;
         const zoomOk = minZ === null ? true : zoom >= minZ;
         const filterOk = this.isEntityFilterActive(resolvedEnt);
         const shouldShow = filterOk && zoomOk;
 
-        let marker = this._markers.get(resolvedEnt.entityId);
-        if (!marker) {
+        if (!existingMarker) {
+          membershipChanged = true;
           const contentEl = createMarkerElement(resolvedEnt, stateObj, isDark);
           const position = { lat, lng };
           const title = resolvedEnt.name || stateObj.attributes?.friendly_name || resolvedEnt.entityId;
 
+          let marker: any;
           if (this._config.mapId && this._google.maps.marker?.AdvancedMarkerElement) {
             marker = new this._google.maps.marker.AdvancedMarkerElement({
               map: shouldShow ? this._map : null,
@@ -695,7 +752,7 @@ export class HaGmapCard extends LitElement {
               title
             });
           } else {
-            marker = createDomMarkerOverlay(this._google.maps, this._map, position, contentEl, title);
+            marker = this._domMarkerLayer!.addMarker(position, contentEl, title);
             marker.setVisible(shouldShow);
           }
 
@@ -709,10 +766,10 @@ export class HaGmapCard extends LitElement {
           this._markers.set(resolvedEnt.entityId, marker);
         } else {
           const newPos = { lat, lng };
-          if (typeof marker.setPosition === "function") marker.setPosition(newPos);
-          else marker.position = newPos;
-          if (typeof marker.setVisible === "function") marker.setVisible(shouldShow);
-          else marker.map = shouldShow ? this._map : null;
+          if (typeof existingMarker.setPosition === "function") existingMarker.setPosition(newPos);
+          else existingMarker.position = newPos;
+          if (typeof existingMarker.setVisible === "function") existingMarker.setVisible(shouldShow);
+          else existingMarker.map = shouldShow ? this._map : null;
         }
       }
     }
@@ -720,12 +777,14 @@ export class HaGmapCard extends LitElement {
     // Prune markers no longer in entities config
     for (const [eid, marker] of this._markers.entries()) {
       if (!activeEntityIds.has(eid)) {
+        membershipChanged = true;
         try {
           if (typeof marker.setMap === "function") marker.setMap(null);
           else marker.map = null;
         } catch (_) {}
         this._markers.delete(eid);
         this._markerConfigs.delete(eid);
+        this._lastEntityState.delete(eid);
       }
     }
 
@@ -741,7 +800,9 @@ export class HaGmapCard extends LitElement {
       }
     }
 
-    this._transitMotion?.updateVisibility();
+    if (membershipChanged) {
+      this._transitMotion?.updateVisibility();
+    }
   }
 
   private followEntitiesIfConfigured() {

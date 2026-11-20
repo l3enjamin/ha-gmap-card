@@ -41,7 +41,6 @@ export function createMarkerElement(
     justify-content: center;
     cursor: pointer;
     user-select: none;
-    transition: transform 0.15s ease;
   `;
 
   const iconSize = entityConfig.iconSize || 32;
@@ -110,7 +109,6 @@ export function createMarkerElement(
           height: ${iconSize}px;
           object-fit: contain;
           display: block;
-          filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.35));
         `;
       } else {
         const br = mType === "square" ? `${entityConfig.pictureBorderRadius ?? 6}px` : "50%";
@@ -208,10 +206,169 @@ export interface DomMarkerLike {
   addListener(eventName: string, handler: () => void): void;
 }
 
+interface BatchedMarkerEntry {
+  pos: any;
+  visible: boolean;
+  attached: boolean;
+  zIndex: number;
+  wrapper: HTMLElement;
+  clickHandlers: Array<() => void>;
+}
+
 /**
- * Lightweight OverlayView wrapper that mounts arbitrary DOM marker elements onto any
- * Google Map (Raster or Vector) without falling back to default red pins.
+ * Single shared OverlayView managing all DOM markers via GPU-composited translate3d,
+ * avoiding dozens of independent OverlayView draw() callbacks on mobile pan/zoom.
  */
+export class BatchedDomMarkerLayer {
+  private overlay: any = null;
+  private entries = new Set<BatchedMarkerEntry>();
+  private rootEl: HTMLElement | null = null;
+
+  constructor(private googleMaps: any, private map: any) {
+    const LayerOverlay = class extends googleMaps.OverlayView {
+      constructor(private parent: BatchedDomMarkerLayer) {
+        super();
+      }
+      onAdd() {
+        const root = document.createElement("div");
+        root.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;overflow:visible;";
+        this.parent.rootEl = root;
+        for (const entry of this.parent.entries) {
+          if (entry.attached) root.appendChild(entry.wrapper);
+        }
+        const panes = this.getPanes();
+        if (panes?.overlayMouseTarget) {
+          panes.overlayMouseTarget.appendChild(root);
+        }
+      }
+      draw() {
+        this.parent.drawAll();
+      }
+      onRemove() {
+        if (this.parent.rootEl?.parentElement) {
+          this.parent.rootEl.parentElement.removeChild(this.parent.rootEl);
+        }
+        this.parent.rootEl = null;
+      }
+    };
+    this.overlay = new LayerOverlay(this);
+    this.overlay.setMap(map);
+  }
+
+  private drawEntry(entry: BatchedMarkerEntry, proj: any) {
+    if (!entry.visible || !entry.attached) return;
+    const pt = proj.fromLatLngToDivPixel(entry.pos);
+    if (pt) {
+      entry.wrapper.style.transform = `translate3d(${Math.round(pt.x)}px, ${Math.round(pt.y)}px, 0) translate(-50%, -50%)`;
+    }
+  }
+
+  public drawAll() {
+    const proj = this.overlay?.getProjection?.();
+    if (!proj) return;
+    for (const entry of this.entries) {
+      this.drawEntry(entry, proj);
+    }
+  }
+
+  public addMarker(
+    position: { lat: number; lng: number },
+    contentEl: HTMLElement,
+    title?: string
+  ): DomMarkerLike {
+    const div = document.createElement("div");
+    div.style.cssText =
+      "position:absolute;left:0;top:0;cursor:pointer;z-index:100;will-change:transform;display:block;";
+    if (title) div.title = title;
+    div.appendChild(contentEl);
+
+    const entry: BatchedMarkerEntry = {
+      pos: new this.googleMaps.LatLng(position.lat, position.lng),
+      visible: true,
+      attached: true,
+      zIndex: 100,
+      wrapper: div,
+      clickHandlers: []
+    };
+
+    div.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      for (const h of entry.clickHandlers) h();
+    });
+
+    this.entries.add(entry);
+    if (this.rootEl) {
+      this.rootEl.appendChild(div);
+      const proj = this.overlay?.getProjection?.();
+      if (proj) this.drawEntry(entry, proj);
+    }
+
+    const layer = this;
+    return {
+      setPosition(newPos: any) {
+        entry.pos =
+          newPos?.lat !== undefined && typeof newPos.lat !== "function"
+            ? new layer.googleMaps.LatLng(newPos.lat, newPos.lng)
+            : newPos;
+        const proj = layer.overlay?.getProjection?.();
+        if (proj) layer.drawEntry(entry, proj);
+      },
+      getPosition() {
+        return entry.pos;
+      },
+      setMap(targetMap: any) {
+        const shouldAttach = Boolean(targetMap);
+        if (entry.attached === shouldAttach) return;
+        entry.attached = shouldAttach;
+        if (shouldAttach) {
+          if (layer.rootEl && !entry.wrapper.parentElement) {
+            layer.rootEl.appendChild(entry.wrapper);
+          }
+          const proj = layer.overlay?.getProjection?.();
+          if (proj) layer.drawEntry(entry, proj);
+        } else if (entry.wrapper.parentElement) {
+          entry.wrapper.parentElement.removeChild(entry.wrapper);
+        }
+      },
+      getMap() {
+        return entry.attached ? layer.map : null;
+      },
+      setVisible(vis: boolean) {
+        if (entry.visible === vis) return;
+        entry.visible = vis;
+        entry.wrapper.style.display = vis ? "block" : "none";
+        if (vis) {
+          const proj = layer.overlay?.getProjection?.();
+          if (proj) layer.drawEntry(entry, proj);
+        }
+      },
+      getVisible() {
+        return entry.visible;
+      },
+      setZIndex(z: number) {
+        entry.zIndex = z;
+        entry.wrapper.style.zIndex = String(z);
+      },
+      addListener(eventName: string, handler: () => void) {
+        if (eventName === "click") {
+          entry.clickHandlers.push(handler);
+        }
+      }
+    };
+  }
+
+  public destroy() {
+    this.entries.clear();
+    if (this.overlay) {
+      try {
+        this.overlay.setMap(null);
+      } catch (_) {}
+      this.overlay = null;
+    }
+    this.rootEl = null;
+  }
+}
+
 export function createDomMarkerOverlay(
   googleMaps: any,
   map: any,
@@ -219,94 +376,6 @@ export function createDomMarkerOverlay(
   contentEl: HTMLElement,
   title?: string
 ): DomMarkerLike {
-  class DomMarkerOverlay extends googleMaps.OverlayView {
-    private pos: any;
-    private visible = true;
-    private wrapper: HTMLElement | null = null;
-    private clickHandlers: Array<() => void> = [];
-    private zIndex = 100;
-
-    constructor(initialPos: { lat: number; lng: number }) {
-      super();
-      this.pos = new googleMaps.LatLng(initialPos.lat, initialPos.lng);
-      this.setMap(map);
-    }
-
-    onAdd() {
-      const div = document.createElement("div");
-      div.style.cssText = `
-        position: absolute;
-        transform: translate(-50%, -50%);
-        cursor: pointer;
-        z-index: ${this.zIndex};
-        display: ${this.visible ? "block" : "none"};
-      `;
-      if (title) div.title = title;
-      div.appendChild(contentEl);
-      div.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        for (const h of this.clickHandlers) h();
-      });
-      this.wrapper = div;
-      const panes = this.getPanes();
-      if (panes?.overlayMouseTarget) {
-        panes.overlayMouseTarget.appendChild(div);
-      }
-    }
-
-    draw() {
-      if (!this.wrapper) return;
-      const proj = this.getProjection();
-      if (!proj) return;
-      const pt = proj.fromLatLngToDivPixel(this.pos);
-      if (pt) {
-        this.wrapper.style.left = `${pt.x}px`;
-        this.wrapper.style.top = `${pt.y}px`;
-      }
-    }
-
-    onRemove() {
-      if (this.wrapper?.parentElement) {
-        this.wrapper.parentElement.removeChild(this.wrapper);
-      }
-      this.wrapper = null;
-    }
-
-    setPosition(newPos: any) {
-      this.pos = newPos?.lat !== undefined && typeof newPos.lat !== "function"
-        ? new googleMaps.LatLng(newPos.lat, newPos.lng)
-        : newPos;
-      this.draw();
-    }
-
-    getPosition() {
-      return this.pos;
-    }
-
-    setVisible(vis: boolean) {
-      this.visible = vis;
-      if (this.wrapper) {
-        this.wrapper.style.display = vis ? "block" : "none";
-      }
-    }
-
-    getVisible() {
-      return this.visible;
-    }
-
-    setZIndex(z: number) {
-      this.zIndex = z;
-      if (this.wrapper) {
-        this.wrapper.style.zIndex = String(z);
-      }
-    }
-
-    addListener(eventName: string, handler: () => void) {
-      if (eventName === "click") {
-        this.clickHandlers.push(handler);
-      }
-    }
-  }
-
-  return new DomMarkerOverlay(position) as unknown as DomMarkerLike;
+  const layer = new BatchedDomMarkerLayer(googleMaps, map);
+  return layer.addMarker(position, contentEl, title);
 }

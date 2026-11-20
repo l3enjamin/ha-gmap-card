@@ -5,6 +5,7 @@ import {
   haversineMeters,
   interpolateTripPosition,
   matchEntityPattern,
+  resolveServiceDaySeconds,
   TransitSchedule
 } from "./schedule";
 
@@ -201,6 +202,11 @@ export class TransitMotionEngine {
   public setFilterActive(active: boolean) {
     this.filterActive = active;
     this.updateVisibility();
+    if (active) {
+      this.ingestTick();
+    } else {
+      this.stopAnimLoop();
+    }
   }
 
   public getEntityConfig(entityId: string): CardEntityConfig | undefined {
@@ -311,6 +317,23 @@ export class TransitMotionEngine {
         this.ingestTick();
       }
     }, 1000);
+    this.ingestTick();
+  }
+
+  private hasActiveMotion(): boolean {
+    if (!this.filterActive || !this.motionConfig.enabled) return false;
+    if (!this.isCulled && this.activeTrips.size > 0) return true;
+    const nowMs = Date.now();
+    for (const bState of this.busStates.values()) {
+      if ((nowMs - bState.lastUpdateMs) / 1000 < 35 && bState.velocityMps > 1.0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private ensureAnimLoop() {
+    if (this.destroyed || this.animTimer !== null || !this.hasActiveMotion()) return;
 
     const scheduleFrame = (cb: (now: number) => void) =>
       typeof requestAnimationFrame === "function"
@@ -319,7 +342,10 @@ export class TransitMotionEngine {
 
     let lastFrame = typeof performance !== "undefined" ? performance.now() : Date.now();
     const render = (now: number) => {
-      if (this.destroyed) return;
+      if (this.destroyed || !this.hasActiveMotion()) {
+        this.animTimer = null;
+        return;
+      }
       if (typeof document === "undefined" || !document.hidden) {
         const elapsed = now - lastFrame;
         if (elapsed >= this.frameIntervalMs) {
@@ -332,17 +358,35 @@ export class TransitMotionEngine {
     this.animTimer = scheduleFrame(render);
   }
 
+  private stopAnimLoop() {
+    if (this.animTimer !== null) {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(this.animTimer);
+      } else {
+        clearTimeout(this.animTimer);
+      }
+      this.animTimer = null;
+    }
+  }
+
   private ingestTick() {
     if (!this.motionConfig.enabled || !this.map) return;
     if (this.filterActive && !this.isCulled) {
       this.ingestScheduledVehicles(new Date());
     }
     this.ingestBuses(Date.now());
+    if (this.hasActiveMotion()) {
+      this.ensureAnimLoop();
+    } else {
+      this.stopAnimLoop();
+    }
   }
 
   private ingestScheduledVehicles(nowDate: Date) {
     if (!this.schedule) return;
-    const active = findActiveScheduledTrips(this.schedule, nowDate, this.motionConfig.routes);
+    const active = findActiveScheduledTrips(this.schedule, nowDate, this.motionConfig.routes, {
+      simulate247: this.motionConfig.simulate247
+    });
     const activeKeys = new Set<string>();
 
     for (const trip of active) {
@@ -440,9 +484,7 @@ export class TransitMotionEngine {
 
     const bounds = typeof this.map.getBounds === "function" ? this.map.getBounds() : null;
     const zoom = typeof this.map.getZoom === "function" ? this.map.getZoom() : 15;
-    const d = new Date();
-    const secNow =
-      d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
+    const secNow = resolveServiceDaySeconds(new Date());
 
     if (!this.isCulled) {
       for (const [key, trip] of this.activeTrips.entries()) {
