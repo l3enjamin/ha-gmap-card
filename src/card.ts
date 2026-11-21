@@ -186,6 +186,13 @@ export class HaGmapCard extends LitElement {
     };
   }
 
+  public connectedCallback() {
+    super.connectedCallback();
+    if (this.hasUpdated && this._config && !this._map) {
+      this.initMap();
+    }
+  }
+
   protected firstUpdated(_changedProperties: PropertyValues) {
     super.firstUpdated(_changedProperties);
     this.initMap();
@@ -231,6 +238,8 @@ export class HaGmapCard extends LitElement {
     this._initPromise = null;
     this._initialCenterApplied = false;
     this._initialFitDone = false;
+    const container = this.renderRoot?.querySelector("#map-container") as HTMLElement | null;
+    if (container) container.innerHTML = "";
   }
 
   private isDarkMode(): boolean {
@@ -271,6 +280,7 @@ export class HaGmapCard extends LitElement {
 
   private async initMap() {
     if (this._initPromise) return this._initPromise;
+    if (!this._config?.apiKey) return;
     const container = this.renderRoot.querySelector("#map-container") as HTMLElement;
     if (!container || this._map) return;
 
@@ -372,8 +382,13 @@ export class HaGmapCard extends LitElement {
 
         const overlay = this.renderRoot.querySelector(".loading-overlay");
         if (overlay) overlay.remove();
-      } catch (err) {
+      } catch (err: any) {
+        this._initPromise = null;
         console.error("[ha-gmap-card] Error initializing map:", err);
+        const overlay = this.renderRoot.querySelector(".loading-overlay");
+        if (overlay) {
+          overlay.textContent = `Map failed to load: ${err?.message || err}`;
+        }
       }
     })();
 

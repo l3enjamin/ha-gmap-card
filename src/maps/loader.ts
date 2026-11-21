@@ -11,16 +11,30 @@ export interface MapLoaderOptions {
   language?: string;
 }
 
+async function ensureLibrariesLoaded(): Promise<any> {
+  if (!window.google?.maps) {
+    throw new Error("Google Maps loaded but window.google.maps is undefined");
+  }
+  if (typeof window.google.maps.importLibrary === "function") {
+    await window.google.maps.importLibrary("maps");
+    try {
+      await window.google.maps.importLibrary("marker");
+    } catch (_) {}
+  }
+  return window.google;
+}
+
 /**
  * Singleton Google Maps API loader using modern `loading=async` dynamic script injection.
+ * Resolves to `window.google` after core `maps` and `marker` libraries are ready.
  */
 export function loadGoogleMaps(options: MapLoaderOptions): Promise<any> {
   if (typeof window === "undefined") {
     return Promise.reject(new Error("Cannot load Google Maps outside browser environment"));
   }
 
-  if (window.google?.maps?.importLibrary) {
-    return Promise.resolve(window.google.maps);
+  if (window.google?.maps) {
+    return ensureLibrariesLoaded();
   }
 
   if (window._haGmapLoadingPromise) {
@@ -28,15 +42,21 @@ export function loadGoogleMaps(options: MapLoaderOptions): Promise<any> {
   }
 
   window._haGmapLoadingPromise = new Promise((resolve, reject) => {
-    // Check if script already on page
     const existing = document.querySelector('script[src*="maps.googleapis.com/maps/api/js"]');
     if (existing) {
       if (window.google?.maps) {
-        resolve(window.google.maps);
+        ensureLibrariesLoaded().then(resolve, reject);
         return;
       }
-      existing.addEventListener("load", () => resolve(window.google.maps));
-      existing.addEventListener("error", (e) => reject(e));
+      existing.addEventListener("load", () => ensureLibrariesLoaded().then(resolve, reject), { once: true });
+      existing.addEventListener(
+        "error",
+        (e) => {
+          window._haGmapLoadingPromise = undefined;
+          reject(e);
+        },
+        { once: true }
+      );
       return;
     }
 
@@ -56,11 +76,10 @@ export function loadGoogleMaps(options: MapLoaderOptions): Promise<any> {
     script.src = `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
     script.async = true;
     script.onload = () => {
-      if (window.google?.maps) {
-        resolve(window.google.maps);
-      } else {
-        reject(new Error("Google Maps loaded but window.google.maps is undefined"));
-      }
+      ensureLibrariesLoaded().then(resolve, (err) => {
+        window._haGmapLoadingPromise = undefined;
+        reject(err);
+      });
     };
     script.onerror = (err) => {
       window._haGmapLoadingPromise = undefined;
