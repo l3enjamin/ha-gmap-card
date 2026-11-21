@@ -132,7 +132,19 @@ export class HaGmapCard extends LitElement {
       }
 
       const nextGeoSig = JSON.stringify(
-        this._config.geojsonLayers.map((g) => [g.url, g.strokeColor, g.strokeWidth, g.stationIcon, g.stopIcon, g.filterGroup])
+        this._config.geojsonLayers.map((g) => [
+          g.url,
+          g.strokeColor,
+          g.strokeWidth,
+          g.icon,
+          g.image,
+          g.pointShape,
+          g.pointSize,
+          g.pointColor,
+          g.stationIcon,
+          g.stopIcon,
+          g.filterGroup
+        ])
       );
       if (nextGeoSig !== this._geoSignature) {
         this.clearGeoJsonLayers();
@@ -520,7 +532,19 @@ export class HaGmapCard extends LitElement {
   private loadGeoJsonLayers() {
     if (!this._map || !this._google) return;
     this._geoSignature = JSON.stringify(
-      this._config.geojsonLayers.map((g) => [g.url, g.strokeColor, g.strokeWidth, g.stationIcon, g.stopIcon, g.filterGroup])
+      this._config.geojsonLayers.map((g) => [
+        g.url,
+        g.strokeColor,
+        g.strokeWidth,
+        g.icon,
+        g.image,
+        g.pointShape,
+        g.pointSize,
+        g.pointColor,
+        g.stationIcon,
+        g.stopIcon,
+        g.filterGroup
+      ])
     );
 
     const isDark = this.isDarkMode();
@@ -631,84 +655,52 @@ export class HaGmapCard extends LitElement {
       mode === "metro";
 
     const title = String(feature.getProperty("name") || feature.getProperty("Station") || (isStation ? "Station" : "Stop"));
+    const pColor = layerCfg.pointColor || feature.getProperty("color") || sColor;
+    const bColor = layerCfg.borderColor || "#ffffff";
+    const bWidth = layerCfg.borderWidth ?? 1.2;
+    const pShape = layerCfg.pointShape;
+    const sz = layerCfg.pointSize ?? (isStation ? layerCfg.stationSize || 18 : layerCfg.stopSize || 14);
 
-    if (isStation) {
-      const sz = layerCfg.stationSize || 18;
-      if (layerCfg.stationIcon) {
-        let resolvedUrl = layerCfg.stationIcon;
-        if (resolvedUrl.startsWith("mdi:")) {
-          const cached = resolveMdiIconDataUrl(
-            resolvedUrl,
-            { size: sz, bgColor: sColor, fgColor: "#ffffff", badge: true },
-            (asyncUrl) => {
-              dataLayer.overrideStyle(feature, {
-                icon: {
-                  url: asyncUrl,
-                  scaledSize: new this._google.maps.Size(sz, sz),
-                  anchor: new this._google.maps.Point(sz / 2, sz / 2)
-                }
-              });
-            }
-          );
-          resolvedUrl = cached || "";
-        }
-        if (resolvedUrl) {
-          return {
-            icon: {
-              url: resolvedUrl,
-              scaledSize: new this._google.maps.Size(sz, sz),
-              anchor: new this._google.maps.Point(sz / 2, sz / 2)
-            },
-            title,
-            clickable
-          };
-        }
-      }
+    // Neutral `image` / `icon` with legacy `station_icon` / `stop_icon` fallback
+    const legacySpec = isStation ? layerCfg.stationIcon : layerCfg.stopIcon;
+    const imageUrl =
+      layerCfg.image || (legacySpec && !legacySpec.startsWith("mdi:") ? legacySpec : undefined);
+    const mdiSpec =
+      (layerCfg.icon && layerCfg.icon.startsWith("mdi:") ? layerCfg.icon : undefined) ||
+      (legacySpec && legacySpec.startsWith("mdi:") ? legacySpec : undefined);
 
-      const tSvg =
-        `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}'>` +
-        `<rect width='24' height='24' rx='4' fill='${sColor}'/>` +
-        `<path d='M4.5 6.5h15v3h-5.7v9h-3.6v-9H4.5v-3z' fill='#FFFFFF'/></svg>`;
-      const cacheKey = `station_t|${sColor}|${sz}`;
-      let iconObj = this._geoIconCache.get(cacheKey);
-      if (!iconObj) {
-        iconObj = {
-          url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(tSvg),
+    if (imageUrl && pShape !== "icon") {
+      const imgKey = `geo_img|${imageUrl}|${sz}`;
+      let imgIcon = this._geoIconCache.get(imgKey);
+      if (!imgIcon) {
+        imgIcon = {
+          url: imageUrl,
           scaledSize: new this._google.maps.Size(sz, sz),
           anchor: new this._google.maps.Point(sz / 2, sz / 2)
         };
-        this._geoIconCache.set(cacheKey, iconObj);
+        this._geoIconCache.set(imgKey, imgIcon);
       }
-      return {
-        icon: iconObj,
-        title,
-        clickable
-      };
+      return { icon: imgIcon, title, clickable };
     }
 
-    if (layerCfg.stopIcon) {
-      const sz = layerCfg.stopSize || 14;
-      let resolvedUrl = layerCfg.stopIcon;
-      if (resolvedUrl.startsWith("mdi:")) {
-        resolvedUrl =
-          resolveMdiIconDataUrl(
-            resolvedUrl,
-            { size: sz, bgColor: sColor, fgColor: "#ffffff", badge: true },
-            (asyncUrl) => {
-              dataLayer.overrideStyle(feature, {
-                icon: {
-                  url: asyncUrl,
-                  scaledSize: new this._google.maps.Size(sz, sz),
-                  anchor: new this._google.maps.Point(sz / 2, sz / 2)
-                }
-              });
+    if (mdiSpec) {
+      const cached = resolveMdiIconDataUrl(
+        mdiSpec,
+        { size: sz, bgColor: pColor, fgColor: "#ffffff", borderColor: bColor, badge: pShape !== "icon" },
+        (asyncUrl) => {
+          dataLayer.overrideStyle(feature, {
+            icon: {
+              url: asyncUrl,
+              scaledSize: new this._google.maps.Size(sz, sz),
+              anchor: new this._google.maps.Point(sz / 2, sz / 2)
             }
-          ) || "";
-      }
-      if (resolvedUrl) {
+          });
+        }
+      );
+      if (cached) {
         return {
           icon: {
-            url: resolvedUrl,
+            url: cached,
             scaledSize: new this._google.maps.Size(sz, sz),
             anchor: new this._google.maps.Point(sz / 2, sz / 2)
           },
@@ -718,17 +710,55 @@ export class HaGmapCard extends LitElement {
       }
     }
 
-    const fillC = feature.getProperty("color") || sColor;
-    const dotKey = `dot|${fillC}`;
+    if (pShape === "square" || pShape === "rectangle") {
+      const w = pShape === "rectangle" ? Math.round(sz * 1.4) : sz;
+      const h = sz;
+      const shapeKey = `geo_shape|${pShape}|${w}|${h}|${pColor}|${bColor}|${bWidth}`;
+      let shapeIcon = this._geoIconCache.get(shapeKey);
+      if (!shapeIcon) {
+        const svg =
+          `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>` +
+          `<rect x='1' y='1' width='${w - 2}' height='${h - 2}' rx='3' fill='${pColor}' stroke='${bColor}' stroke-width='${bWidth}'/>` +
+          `</svg>`;
+        shapeIcon = {
+          url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+          scaledSize: new this._google.maps.Size(w, h),
+          anchor: new this._google.maps.Point(w / 2, h / 2)
+        };
+        this._geoIconCache.set(shapeKey, shapeIcon);
+      }
+      return { icon: shapeIcon, title, clickable };
+    }
+
+    if (isStation && pShape !== "circle") {
+      const cacheKey = `station_t|${pColor}|${sz}`;
+      let iconObj = this._geoIconCache.get(cacheKey);
+      if (!iconObj) {
+        const tSvg =
+          `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}'>` +
+          `<rect width='24' height='24' rx='4' fill='${pColor}'/>` +
+          `<path d='M4.5 6.5h15v3h-5.7v9h-3.6v-9H4.5v-3z' fill='#FFFFFF'/></svg>`;
+        iconObj = {
+          url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(tSvg),
+          scaledSize: new this._google.maps.Size(sz, sz),
+          anchor: new this._google.maps.Point(sz / 2, sz / 2)
+        };
+        this._geoIconCache.set(cacheKey, iconObj);
+      }
+      return { icon: iconObj, title, clickable };
+    }
+
+    const dotScale = layerCfg.pointSize !== undefined ? layerCfg.pointSize / 2 : 2.2;
+    const dotKey = `dot|${pColor}|${bColor}|${dotScale}|${layerCfg.borderWidth ?? 0.6}`;
     let dotIcon = this._geoIconCache.get(dotKey);
     if (!dotIcon) {
       dotIcon = {
         path: this._google.maps.SymbolPath.CIRCLE,
-        scale: 2.2,
-        fillColor: fillC,
+        scale: dotScale,
+        fillColor: pColor,
         fillOpacity: 0.95,
-        strokeColor: "#ffffff",
-        strokeWeight: 0.6
+        strokeColor: bColor,
+        strokeWeight: layerCfg.borderWidth ?? 0.6
       };
       this._geoIconCache.set(dotKey, dotIcon);
     }

@@ -190,6 +190,31 @@ describe("Card Config Normalization & Aliasing", () => {
       filterGroup: "routes"
     });
 
+    const neutralGeo = normalizeCardConfig({
+      api_key: "test",
+      geojson_layers: [
+        {
+          url: "/local/ferry.geojson",
+          icon: "mdi:ferry",
+          image: "/local/pier.png",
+          point_shape: "square",
+          point_size: 20,
+          point_color: "#00897B",
+          border_color: "#ffffff",
+          border_width: 2
+        }
+      ]
+    });
+    expect(neutralGeo.geojsonLayers[0]).toMatchObject({
+      icon: "mdi:ferry",
+      image: "/local/pier.png",
+      pointShape: "square",
+      pointSize: 20,
+      pointColor: "#00897B",
+      borderColor: "#ffffff",
+      borderWidth: 2
+    });
+
     expect(cfg.transitMotion).toMatchObject({
       enabled: true,
       fps: 30,

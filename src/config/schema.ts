@@ -35,6 +35,13 @@ export interface GeoJsonLayerConfig {
   name?: string;
   label?: string;
   routeKey?: string;
+  icon?: string;
+  image?: string;
+  pointShape?: MarkerShapeType;
+  pointSize?: number;
+  pointColor?: string;
+  borderColor?: string;
+  borderWidth?: number;
   stationIcon?: string;
   stopIcon?: string;
   stationSize: number;
@@ -201,22 +208,33 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
   }
 
   const geoRaw = cfg.geojson_layers || cfg.geojsonLayers || [];
-  const geojsonLayers: GeoJsonLayerConfig[] = (Array.isArray(geoRaw) ? geoRaw : []).map((l: any) => ({
-    url: l.url || "",
-    name: l.name || l.label,
-    label: l.label || l.name,
-    routeKey: l.route_key || l.routeKey || l.route_id,
-    stationIcon: l.station_icon || l.stationIcon,
-    stopIcon: l.stop_icon || l.stopIcon,
-    stationSize: Number(l.station_size ?? l.station_icon_size ?? 18),
-    stopSize: Number(l.stop_size ?? l.stop_icon_size ?? 14),
-    strokeColor: l.stroke_color || l.strokeColor || l.color || "#007aff",
-    strokeWidth: Number(l.stroke_width ?? l.strokeWidth ?? l.width ?? 3),
-    fillColor: l.fill_color || l.fillColor,
-    fillOpacity: l.fill_opacity ?? l.fillOpacity,
-    showPopup: l.show_popup ?? l.showPopup ?? true,
-    filterGroup: l.filter_group || l.filterGroup || l.group || "routes"
-  }));
+  const geojsonLayers: GeoJsonLayerConfig[] = (Array.isArray(geoRaw) ? geoRaw : []).map((l: any) => {
+    const rawPointSize = l.point_size ?? l.pointSize ?? l.icon_size ?? l.iconSize ?? l.size;
+    const rawBorderWidth = l.border_width ?? l.borderWidth;
+    return {
+      url: l.url || "",
+      name: l.name || l.label,
+      label: l.label || l.name,
+      routeKey: l.route_key || l.routeKey || l.route_id,
+      icon: l.icon,
+      image: l.image || l.picture,
+      pointShape: l.point_shape || l.pointShape || l.marker_type || l.markerType || l.shape,
+      pointSize: rawPointSize !== undefined ? Number(rawPointSize) : undefined,
+      pointColor: l.point_color || l.pointColor || l.background_color || l.backgroundColor,
+      borderColor: l.border_color || l.borderColor,
+      borderWidth: rawBorderWidth !== undefined ? Number(rawBorderWidth) : undefined,
+      stationIcon: l.station_icon || l.stationIcon,
+      stopIcon: l.stop_icon || l.stopIcon,
+      stationSize: Number(l.station_size ?? l.station_icon_size ?? rawPointSize ?? 18),
+      stopSize: Number(l.stop_size ?? l.stop_icon_size ?? rawPointSize ?? 14),
+      strokeColor: l.stroke_color || l.strokeColor || l.color || "#007aff",
+      strokeWidth: Number(l.stroke_width ?? l.strokeWidth ?? l.width ?? 3),
+      fillColor: l.fill_color || l.fillColor,
+      fillOpacity: l.fill_opacity ?? l.fillOpacity,
+      showPopup: l.show_popup ?? l.showPopup ?? true,
+      filterGroup: l.filter_group || l.filterGroup || l.group || "routes"
+    };
+  });
 
   const tmRaw = cfg.transit_motion ?? cfg.transitMotion ?? {};
   const rawBusMatch = tmRaw?.bus_match ?? tmRaw?.busMatch ?? tmRaw?.vehicle_entities;
