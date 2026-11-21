@@ -278,9 +278,13 @@ export class BatchedDomMarkerLayer {
   ): DomMarkerLike {
     const div = document.createElement("div");
     div.style.cssText =
-      "position:absolute;left:0;top:0;cursor:pointer;z-index:100;will-change:transform;display:block;";
+      "position:absolute;left:0;top:0;min-width:28px;min-height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:100;will-change:transform;";
     if (title) div.title = title;
     div.appendChild(contentEl);
+
+    if (typeof this.googleMaps?.OverlayView?.preventMapHitsFrom === "function") {
+      this.googleMaps.OverlayView.preventMapHitsFrom(div);
+    }
 
     const entry: BatchedMarkerEntry = {
       pos: new this.googleMaps.LatLng(position.lat, position.lng),
@@ -291,6 +295,8 @@ export class BatchedDomMarkerLayer {
       clickHandlers: []
     };
 
+    div.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    div.addEventListener("mousedown", (ev) => ev.stopPropagation());
     div.addEventListener("click", (ev) => {
       ev.stopPropagation();
       for (const h of entry.clickHandlers) h();
@@ -336,7 +342,7 @@ export class BatchedDomMarkerLayer {
       setVisible(vis: boolean) {
         if (entry.visible === vis) return;
         entry.visible = vis;
-        entry.wrapper.style.display = vis ? "block" : "none";
+        entry.wrapper.style.display = vis ? "flex" : "none";
         if (vis) {
           const proj = layer.overlay?.getProjection?.();
           if (proj) layer.drawEntry(entry, proj);

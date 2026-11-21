@@ -44,6 +44,7 @@ export class HaGmapCard extends LitElement {
   private _initialFitDone = false;
   private _geoSignature = "";
   private _lastWildcardScanMs = 0;
+  private _lastMarkerClickMs = 0;
   private _initPromise: Promise<void> | null = null;
 
   static styles = css`
@@ -61,6 +62,19 @@ export class HaGmapCard extends LitElement {
       position: relative;
       border-radius: var(--ha-card-border-radius, 12px);
       overflow: hidden;
+    }
+    .gm-style-iw-c {
+      padding: 0 !important;
+      background: transparent !important;
+      box-shadow: none !important;
+      border-radius: 8px !important;
+    }
+    .gm-style-iw-d {
+      overflow: visible !important;
+      max-height: none !important;
+    }
+    .gm-style-iw-tc::after {
+      background: var(--ha-gmap-iw-bg, #ffffff) !important;
     }
     .loading-overlay {
       position: absolute;
@@ -292,6 +306,7 @@ export class HaGmapCard extends LitElement {
         });
 
         const isDark = this.isDarkMode();
+        container.style.setProperty("--ha-gmap-iw-bg", isDark ? "#1e1e1e" : "#ffffff");
         const initialResolved = this.resolveCenterLatLng(false);
         const centerCoord = initialResolved || { lat: 49.18, lng: -123.12 };
         if (initialResolved) {
@@ -328,6 +343,11 @@ export class HaGmapCard extends LitElement {
         }
 
         this._map = new this._google.maps.Map(container, mapOptions);
+        this._map.addListener("click", (ev: any) => {
+          if (ev?.placeId && Date.now() - this._lastMarkerClickMs < 400) {
+            ev.stop?.();
+          }
+        });
         this._domMarkerLayer = new BatchedDomMarkerLayer(this._google.maps, this._map);
         this._popupController = new PopupController(this._google.maps);
         this._popupController.setHass(this._hass);
@@ -513,10 +533,12 @@ export class HaGmapCard extends LitElement {
       dataLayer.setStyle((feature: any) => this.computeGeoFeatureStyle(dataLayer, feature, layerCfg));
 
       if (layerCfg.showPopup !== false) {
+        const hiddenKeys = new Set(["color", "strokeColor", "strokeWeight", "scale", "point_type", "type", "location_type", "route_type"]);
         dataLayer.addListener("click", (ev: any) => {
+          if (Date.now() - this._lastMarkerClickMs < 350) return;
           const props: string[] = [];
           ev.feature?.forEachProperty?.((val: any, key: string) => {
-            if (val !== null && val !== undefined && val !== "") {
+            if (val !== null && val !== undefined && val !== "" && !hiddenKeys.has(key)) {
               props.push(`<div style="margin-bottom:2px;"><b>${escapeHtml(String(key))}:</b> ${escapeHtml(String(val))}</div>`);
             }
           });
@@ -563,6 +585,41 @@ export class HaGmapCard extends LitElement {
     }
 
     const pointType = String(feature.getProperty("point_type") || "").toLowerCase();
+    const featType = String(feature.getProperty("type") || "").toLowerCase();
+    const badgeProp = feature.getProperty("badge");
+    const clickable = layerCfg.showPopup !== false;
+
+    if (pointType === "badge" || featType === "badge" || badgeProp) {
+      const badgeText = String(badgeProp || layerCfg.label || layerCfg.name || "").trim();
+      const badgeColor = String(feature.getProperty("color") || sColor || "#007aff");
+      if (badgeText) {
+        const badgeKey = `badge|${badgeText}|${badgeColor}`;
+        let badgeIcon = this._geoIconCache.get(badgeKey);
+        if (!badgeIcon) {
+          const w = Math.max(32, Math.round(badgeText.length * 7.2 + 16));
+          const h = 22;
+          const safeText = escapeHtml(badgeText);
+          const badgeSvg =
+            `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>` +
+            `<rect x='1' y='1' width='${w - 2}' height='${h - 2}' rx='10' fill='${badgeColor}' stroke='#ffffff' stroke-width='1.5'/>` +
+            `<text x='${w / 2}' y='14.5' text-anchor='middle' fill='#ffffff' font-family='-apple-system,BlinkMacSystemFont,Roboto,sans-serif' font-size='11' font-weight='700'>${safeText}</text>` +
+            `</svg>`;
+          badgeIcon = {
+            url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(badgeSvg),
+            scaledSize: new this._google.maps.Size(w, h),
+            anchor: new this._google.maps.Point(w / 2, h / 2)
+          };
+          this._geoIconCache.set(badgeKey, badgeIcon);
+        }
+        return {
+          icon: badgeIcon,
+          title: String(feature.getProperty("name") || badgeText),
+          clickable,
+          zIndex: 200
+        };
+      }
+    }
+
     const locType = feature.getProperty("location_type");
     const mode = String(feature.getProperty("mode") || "").toLowerCase();
     const isStation =
@@ -574,7 +631,6 @@ export class HaGmapCard extends LitElement {
       mode === "metro";
 
     const title = String(feature.getProperty("name") || feature.getProperty("Station") || (isStation ? "Station" : "Stop"));
-    const clickable = layerCfg.showPopup !== false;
 
     if (isStation) {
       const sz = layerCfg.stationSize || 18;
@@ -773,6 +829,7 @@ export class HaGmapCard extends LitElement {
 
           const eid = resolvedEnt.entityId;
           marker.addListener("click", () => {
+            this._lastMarkerClickMs = Date.now();
             const latestState = this._hass?.states?.[eid] || stateObj;
             const latestCfg = this._markerConfigs.get(eid) || resolvedEnt;
             this._popupController?.open(this._map, marker, latestCfg, latestState, this.isDarkMode());
