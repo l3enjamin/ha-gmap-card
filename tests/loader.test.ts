@@ -30,4 +30,24 @@ describe("Google Maps Async Loader", () => {
     expect(result.maps.Map).toBe(fakeGoogle.maps.Map);
     expect(imported).toEqual(["maps", "marker"]);
   });
+
+  it("waits for async bootstrap and merges Map from importLibrary when google.maps stub lacks Map", async () => {
+    class FakeMap {}
+    class FakeAdvancedMarker {}
+    const stubGoogle: any = { maps: {} };
+    (globalThis as any).window = { google: stubGoogle };
+
+    setTimeout(() => {
+      stubGoogle.maps.importLibrary = async (lib: string) => {
+        if (lib === "maps") return { Map: FakeMap };
+        if (lib === "marker") return { AdvancedMarkerElement: FakeAdvancedMarker };
+        return {};
+      };
+    }, 30);
+
+    const result = await loadGoogleMaps({ apiKey: "test-key" });
+    expect(typeof result.maps.Map).toBe("function");
+    expect(result.maps.Map).toBe(FakeMap);
+    expect(result.maps.marker.AdvancedMarkerElement).toBe(FakeAdvancedMarker);
+  });
 });

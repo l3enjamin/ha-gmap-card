@@ -11,29 +11,56 @@ export interface MapLoaderOptions {
   language?: string;
 }
 
-async function ensureLibrariesLoaded(): Promise<any> {
-  if (!window.google?.maps) {
-    throw new Error("Google Maps loaded but window.google.maps is undefined");
+async function waitForMapsBootstrap(timeoutMs = 10000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (
+      typeof window.google?.maps?.Map === "function" ||
+      typeof window.google?.maps?.importLibrary === "function"
+    ) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 25));
   }
-  if (typeof window.google.maps.importLibrary === "function") {
-    await window.google.maps.importLibrary("maps");
+  throw new Error("Timed out waiting for Google Maps bootstrap");
+}
+
+async function ensureLibrariesLoaded(): Promise<any> {
+  await waitForMapsBootstrap();
+
+  if (typeof window.google?.maps?.importLibrary === "function") {
+    const mapsLib = await window.google.maps.importLibrary("maps");
+    if (mapsLib && typeof window.google.maps.Map !== "function") {
+      Object.assign(window.google.maps, mapsLib);
+    }
     try {
-      await window.google.maps.importLibrary("marker");
+      const markerLib = await window.google.maps.importLibrary("marker");
+      if (markerLib && !window.google.maps.marker) {
+        window.google.maps.marker = markerLib;
+      }
     } catch (_) {}
   }
+
+  if (typeof window.google?.maps?.Map !== "function") {
+    await waitForMapsBootstrap(5000);
+  }
+  if (typeof window.google?.maps?.Map !== "function") {
+    throw new Error("Google Maps loaded but google.maps.Map constructor is unavailable");
+  }
+
   return window.google;
 }
 
 /**
  * Singleton Google Maps API loader using modern `loading=async` dynamic script injection.
- * Resolves to `window.google` after core `maps` and `marker` libraries are ready.
+ * Resolves to `window.google` only after `google.maps.Map` and `marker` libraries are ready.
  */
 export function loadGoogleMaps(options: MapLoaderOptions): Promise<any> {
   if (typeof window === "undefined") {
     return Promise.reject(new Error("Cannot load Google Maps outside browser environment"));
   }
 
-  if (window.google?.maps) {
+  if (typeof window.google?.maps?.Map === "function") {
     return ensureLibrariesLoaded();
   }
 
@@ -42,21 +69,24 @@ export function loadGoogleMaps(options: MapLoaderOptions): Promise<any> {
   }
 
   window._haGmapLoadingPromise = new Promise((resolve, reject) => {
+    const fail = (err: any) => {
+      window._haGmapLoadingPromise = undefined;
+      reject(err);
+    };
+
+    if (window.google?.maps) {
+      ensureLibrariesLoaded().then(resolve, fail);
+      return;
+    }
+
     const existing = document.querySelector('script[src*="maps.googleapis.com/maps/api/js"]');
     if (existing) {
       if (window.google?.maps) {
-        ensureLibrariesLoaded().then(resolve, reject);
+        ensureLibrariesLoaded().then(resolve, fail);
         return;
       }
-      existing.addEventListener("load", () => ensureLibrariesLoaded().then(resolve, reject), { once: true });
-      existing.addEventListener(
-        "error",
-        (e) => {
-          window._haGmapLoadingPromise = undefined;
-          reject(e);
-        },
-        { once: true }
-      );
+      existing.addEventListener("load", () => ensureLibrariesLoaded().then(resolve, fail), { once: true });
+      existing.addEventListener("error", fail, { once: true });
       return;
     }
 
@@ -76,15 +106,9 @@ export function loadGoogleMaps(options: MapLoaderOptions): Promise<any> {
     script.src = `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
     script.async = true;
     script.onload = () => {
-      ensureLibrariesLoaded().then(resolve, (err) => {
-        window._haGmapLoadingPromise = undefined;
-        reject(err);
-      });
+      ensureLibrariesLoaded().then(resolve, fail);
     };
-    script.onerror = (err) => {
-      window._haGmapLoadingPromise = undefined;
-      reject(err);
-    };
+    script.onerror = fail;
 
     document.head.appendChild(script);
   });
