@@ -160,4 +160,39 @@ describe("Transit Schedule Pure Logic", () => {
     expect(keys).toContain("route_410");
     expect(keys).toContain("410");
   });
+
+  it("computes upcoming train arrivals at any SkyTrain station from schedule profiles and trips", async () => {
+    const mod = await import("../src/transit/schedule");
+    const schedule = {
+      profiles: [
+        {
+          h: "Canada Line To Waterfront",
+          pts: [
+            [0, 49.1675, -123.1363],
+            [180, 49.1748, -123.1363], // Lansdowne Station
+            [420, 49.1955, -123.1262] // Bridgeport Station
+          ] as [number, number, number][]
+        }
+      ],
+      trips: {
+        canada: {
+          "1": [
+            [36000, 0], // departs start 10:00:00 -> reaches Bridgeport at 10:07:00 (36420)
+            [36600, 0] // departs start 10:10:00 -> reaches Bridgeport at 10:17:00 (37020)
+          ] as [number, number][]
+        }
+      }
+    };
+
+    // Query at Bridgeport Station at Wednesday 10:08:00 (36480) -> only 10:17:00 trip is upcoming (9 min)
+    const now = new Date(2026, 10, 18, 10, 8, 0, 0);
+    const arrivals = mod.findUpcomingArrivalsForStation(schedule, 49.1955, -123.1262, now);
+    expect(arrivals.length).toBe(1);
+    expect(arrivals[0]).toMatchObject({
+      lineKey: "canada",
+      headsign: "Canada Line To Waterfront",
+      minutesAway: 9,
+      formattedTime: "10:17"
+    });
+  });
 });

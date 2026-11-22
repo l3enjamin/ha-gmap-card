@@ -305,3 +305,94 @@ export function extractRouteKeys(url?: string, routeKey?: string, name?: string)
   }
   return Array.from(keys);
 }
+
+export interface StationArrival {
+  lineKey: string;
+  headsign: string;
+  arrivalSec: number;
+  minutesAway: number;
+  formattedTime: string;
+}
+
+function formatGtfsTime(totalSec: number): string {
+  const wrapped = Math.floor(totalSec) % 86400;
+  const hh = Math.floor(wrapped / 3600);
+  const mm = Math.floor((wrapped % 3600) / 60);
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+export function findUpcomingArrivalsForStation(
+  schedule: TransitSchedule | null | undefined,
+  stationLat: number,
+  stationLng: number,
+  date: Date,
+  options?: {
+    lineKeys?: string[];
+    maxDistanceMeters?: number;
+    windowSec?: number;
+    limit?: number;
+    rolloverHour?: number;
+  }
+): StationArrival[] {
+  if (!schedule || !Array.isArray(schedule.profiles) || !schedule.trips || Array.isArray(schedule.trips)) {
+    return [];
+  }
+
+  const maxDist = options?.maxDistanceMeters ?? 180;
+  const windowSec = options?.windowSec ?? 5400;
+  const limit = options?.limit ?? 6;
+  const rollover = options?.rolloverHour ?? 3.5;
+
+  const isPostMidnight = date.getHours() < rollover;
+  const serviceDay = isPostMidnight ? (date.getDay() + 6) % 7 : date.getDay();
+  const serviceId = serviceDay === 0 ? "3" : serviceDay === 6 ? "2" : "1";
+  const secNow = resolveServiceDaySeconds(date, { rolloverHour: rollover });
+
+  // Precompute offset in seconds along each profile matching this station
+  const profileStationOffset = new Map<number, number>();
+  for (let pid = 0; pid < schedule.profiles.length; pid++) {
+    const pts = schedule.profiles[pid]?.pts;
+    if (!pts || pts.length < 2) continue;
+    let bestDist = Infinity;
+    let bestTime = -1;
+    for (let j = 0; j < pts.length; j++) {
+      const d = haversineMeters(stationLat, stationLng, pts[j][1], pts[j][2]);
+      if (d < bestDist) {
+        bestDist = d;
+        bestTime = pts[j][0];
+      }
+    }
+    if (bestDist <= maxDist && bestTime >= 0) {
+      profileStationOffset.set(pid, bestTime);
+    }
+  }
+
+  if (profileStationOffset.size === 0) return [];
+
+  const targetLines = options?.lineKeys?.length
+    ? options.lineKeys.filter((k) => Boolean((schedule.trips as any)[k]))
+    : Object.keys(schedule.trips);
+
+  const arrivals: StationArrival[] = [];
+  for (const lineKey of targetLines) {
+    const lineTrips = schedule.trips[lineKey]?.[serviceId] || [];
+    for (let i = 0; i < lineTrips.length; i++) {
+      const [startSec, pid] = lineTrips[i];
+      const offsetSec = profileStationOffset.get(pid);
+      if (offsetSec === undefined) continue;
+      const arrivalSec = startSec + offsetSec;
+      if (arrivalSec >= secNow && arrivalSec <= secNow + windowSec) {
+        arrivals.push({
+          lineKey,
+          headsign: schedule.profiles[pid]?.h || lineKey,
+          arrivalSec,
+          minutesAway: Math.max(0, Math.round((arrivalSec - secNow) / 60)),
+          formattedTime: formatGtfsTime(arrivalSec)
+        });
+      }
+    }
+  }
+
+  arrivals.sort((a, b) => a.arrivalSec - b.arrivalSec);
+  return arrivals.slice(0, limit);
+}

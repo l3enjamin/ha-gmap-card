@@ -209,6 +209,10 @@ export class TransitMotionEngine {
     }
   }
 
+  public getSchedule(): TransitSchedule | null {
+    return this.schedule;
+  }
+
   public getEntityConfig(entityId: string): CardEntityConfig | undefined {
     const list = this.host.entityConfigs;
     const exact = list.find((e) => e.entityId === entityId);

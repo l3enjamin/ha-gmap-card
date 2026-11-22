@@ -5,7 +5,7 @@ import { loadGoogleMaps } from "./maps/loader";
 import { BatchedDomMarkerLayer, createMarkerElement } from "./maps/marker-content";
 import { PopupController } from "./popup/controller";
 import { resolveMdiIconDataUrl, TransitMotionEngine } from "./transit/motion";
-import { extractRouteKeys, matchEntityPattern } from "./transit/schedule";
+import { extractRouteKeys, findUpcomingArrivalsForStation, matchEntityPattern } from "./transit/schedule";
 
 const geoJsonCache = new Map<string, Promise<any>>();
 
@@ -560,8 +560,54 @@ export class HaGmapCard extends LitElement {
         const hiddenKeys = new Set(["color", "strokeColor", "strokeWeight", "scale", "point_type", "type", "location_type", "route_type"]);
         dataLayer.addListener("click", (ev: any) => {
           if (Date.now() - this._lastMarkerClickMs < 350) return;
+          const feat = ev.feature;
+          const pType = String(feat?.getProperty?.("point_type") || "").toLowerCase();
+          const lType = feat?.getProperty?.("location_type");
+          const mode = String(feat?.getProperty?.("mode") || "").toLowerCase();
+          const isStationFeat =
+            feat?.getGeometry?.()?.getType?.() === "Point" &&
+            (pType === "station" || lType === 1 || lType === "1" || mode === "subway" || mode === "rail" || mode === "metro");
+
+          const schedule = this._transitMotion?.getSchedule();
+          const pos = feat?.getGeometry?.()?.get?.();
+          if (isStationFeat && schedule && pos) {
+            const stationName = String(feat.getProperty("Station") || feat.getProperty("name") || "Station");
+            const lineTitle = String(feat.getProperty("Line / Route") || layerCfg.label || layerCfg.name || "");
+            const lineColor = String(feat.getProperty("color") || layerCfg.strokeColor || "#0097A9");
+            const arrivals = findUpcomingArrivalsForStation(schedule, pos.lat(), pos.lng(), new Date(), { limit: 6 });
+
+            const rowsHtml = arrivals.length
+              ? `<table style="width:100%;border-collapse:collapse;font-size:12px;line-height:1.4;">` +
+                `<thead><tr style="border-bottom:1px solid rgba(128,128,128,0.3);text-align:left;">` +
+                `<th style="padding:3px 5px;">路線</th><th style="padding:3px 5px;">時間</th><th style="padding:3px 5px;">方向</th></tr></thead><tbody>` +
+                arrivals
+                  .map((a) => {
+                    const rCfg = this._config.transitMotion.routes?.[a.lineKey];
+                    const badgeLabel = escapeHtml(rCfg?.label || rCfg?.name || a.lineKey);
+                    const badgeBg = escapeHtml(rCfg?.color || lineColor);
+                    const dir = escapeHtml(a.headsign);
+                    const minLabel = a.minutesAway === 0 ? "Now" : `${a.minutesAway}m`;
+                    return (
+                      `<tr style="border-bottom:1px solid rgba(128,128,128,0.15);">` +
+                      `<td style="padding:4px 5px;"><span style="background:${badgeBg};color:#fff;padding:2px 5px;border-radius:4px;font-weight:700;font-size:11px;white-space:nowrap;">${badgeLabel}</span></td>` +
+                      `<td style="padding:4px 5px;font-weight:600;white-space:nowrap;">${a.formattedTime} <span style="opacity:0.7;font-size:11px;">(${minLabel})</span></td>` +
+                      `<td style="padding:4px 5px;">${dir}</td></tr>`
+                    );
+                  })
+                  .join("") +
+                `</tbody></table>`
+              : `<div style="opacity:0.75;font-style:italic;padding:4px 0;">暫無即將離站班次 / No upcoming trains</div>`;
+
+            const headerHtml =
+              `<div style="font-size:14px;font-weight:700;margin-bottom:6px;color:${escapeHtml(lineColor)};">` +
+              `🚇 ${escapeHtml(stationName)}${lineTitle ? ` <span style="font-size:12px;font-weight:500;opacity:0.8;">(${escapeHtml(lineTitle)})</span>` : ""}` +
+              `</div>`;
+            this._popupController?.openAtPosition(this._map, ev.latLng || pos, `${headerHtml}${rowsHtml}`, isDark);
+            return;
+          }
+
           const props: string[] = [];
-          ev.feature?.forEachProperty?.((val: any, key: string) => {
+          feat?.forEachProperty?.((val: any, key: string) => {
             if (val !== null && val !== undefined && val !== "" && !hiddenKeys.has(key)) {
               props.push(`<div style="margin-bottom:2px;"><b>${escapeHtml(String(key))}:</b> ${escapeHtml(String(val))}</div>`);
             }
