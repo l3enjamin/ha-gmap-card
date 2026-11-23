@@ -4,7 +4,7 @@ import { FilterController } from "./filters/controller";
 import { loadGoogleMaps } from "./maps/loader";
 import { BatchedDomMarkerLayer, createMarkerElement } from "./maps/marker-content";
 import { PopupController } from "./popup/controller";
-import { resolveMdiIconDataUrl, TransitMotionEngine } from "./transit/motion";
+import { resolveCustomIconUrl, resolveMdiIconDataUrl, TransitMotionEngine } from "./transit/motion";
 import { extractRouteKeys, findUpcomingArrivalsForStation, matchEntityPattern } from "./transit/schedule";
 
 const geoJsonCache = new Map<string, Promise<any>>();
@@ -707,10 +707,16 @@ export class HaGmapCard extends LitElement {
     const pShape = layerCfg.pointShape;
     const sz = layerCfg.pointSize ?? (isStation ? layerCfg.stationSize || 18 : layerCfg.stopSize || 14);
 
-    // Neutral `image` / `icon` with legacy `station_icon` / `stop_icon` fallback
+    // Neutral `image` / `icon` (supports `cli:` custom_local_icons and `mdi:`) with legacy fallback
     const legacySpec = isStation ? layerCfg.stationIcon : layerCfg.stopIcon;
+    const customIconUrl =
+      (layerCfg.icon && resolveCustomIconUrl(layerCfg.icon)) ||
+      (legacySpec && resolveCustomIconUrl(legacySpec)) ||
+      undefined;
     const imageUrl =
-      layerCfg.image || (legacySpec && !legacySpec.startsWith("mdi:") ? legacySpec : undefined);
+      layerCfg.image ||
+      customIconUrl ||
+      (legacySpec && !legacySpec.startsWith("mdi:") ? legacySpec : undefined);
     const mdiSpec =
       (layerCfg.icon && layerCfg.icon.startsWith("mdi:") ? layerCfg.icon : undefined) ||
       (legacySpec && legacySpec.startsWith("mdi:") ? legacySpec : undefined);

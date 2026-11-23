@@ -28,6 +28,16 @@ const DEFAULT_VEHICLE_ICONS: Record<string, string> = {
   bus: GENERIC_BUS_SVG
 };
 
+export function resolveCustomIconUrl(iconSpec: string): string | null {
+  if (!iconSpec || typeof iconSpec !== "string") return null;
+  const trimmed = iconSpec.trim();
+  if (trimmed.startsWith("cli:")) {
+    const cliName = trimmed.slice(4).trim();
+    return cliName ? `/custom_local_icons/icons/${encodeURIComponent(cliName)}.svg` : null;
+  }
+  return null;
+}
+
 export function resolveMdiIconDataUrl(
   iconSpec: string,
   opts: { size?: number; bgColor?: string; fgColor?: string; borderColor?: string; badge?: boolean } = {},
@@ -110,6 +120,11 @@ export function getTransitVehicleIcon(
     scaledSize: new googleMaps.Size(sz, sz),
     anchor: new googleMaps.Point(sz / 2, sz / 2)
   });
+
+  const customUrl = typeof iconSpec === "string" ? resolveCustomIconUrl(iconSpec) : null;
+  if (customUrl) {
+    return makeIconObj(customUrl);
+  }
 
   if (typeof iconSpec === "string" && iconSpec.trim().startsWith("mdi:")) {
     const fallbackUrl =

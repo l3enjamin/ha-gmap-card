@@ -1,4 +1,5 @@
 import { CardEntityConfig } from "../config/schema";
+import { resolveCustomIconUrl } from "../transit/motion";
 
 export function resolveDotPath(obj: any, dotPath: string): any {
   if (!obj || !dotPath) return undefined;
@@ -48,7 +49,8 @@ export function createMarkerElement(
   const defaultBorder = isDark ? "rgba(255, 255, 255, 0.35)" : "rgba(0, 0, 0, 0.25)";
   const borderColor = entityConfig.borderColor || defaultBorder;
   const mType = entityConfig.markerType;
-  const picture = resolveEntityPicture(entityConfig, stateObj);
+  const customIconSvgUrl = entityConfig.icon ? resolveCustomIconUrl(entityConfig.icon) : null;
+  const picture = resolveEntityPicture(entityConfig, stateObj) || customIconSvgUrl || undefined;
 
   if (mType === "circle" || entityConfig.showIcon === false) {
     const dotSize = entityConfig.iconSize || 10;

@@ -94,6 +94,21 @@ describe("TransitMotionEngine & Icon Resolution", () => {
     const fallbackCfg = normalizeCardConfig({ api_key: "test" });
     const genericBus = getTransitVehicleIcon(fakeGoogleMaps, "unknown", fallbackCfg.transitMotion, "bus");
     expect(genericBus.url).toBe(GENERIC_BUS_SVG);
+
+    const cliCfg = normalizeCardConfig({
+      api_key: "test",
+      transit_motion: {
+        schedule_url: "",
+        vehicles: { bus: "cli:translink-bus" },
+        routes: { canada: { icon: "cli:translink-canada" } }
+      }
+    });
+    expect(getTransitVehicleIcon(fakeGoogleMaps, "canada", cliCfg.transitMotion, "subway").url).toBe(
+      "/custom_local_icons/icons/translink-canada.svg"
+    );
+    expect(getTransitVehicleIcon(fakeGoogleMaps, "410", cliCfg.transitMotion, "bus").url).toBe(
+      "/custom_local_icons/icons/translink-bus.svg"
+    );
   });
 
   it("enforces minZoom, busMinZoom, and per-entity minZoom during zoom changes", () => {
