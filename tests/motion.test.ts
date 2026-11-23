@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { normalizeCardConfig } from "../src/config/schema";
-import { GENERIC_BUS_SVG, getTransitVehicleIcon, TransitMotionEngine } from "../src/transit/motion";
+import {
+  buildSvgBadgeDataUrl,
+  GENERIC_BUS_SVG,
+  getTransitVehicleIcon,
+  resolveCustomSvgBadgeDataUrl,
+  TransitMotionEngine
+} from "../src/transit/motion";
 
 const fakeGoogleMaps = {
   Size: class {
@@ -183,5 +189,74 @@ describe("TransitMotionEngine & Icon Resolution", () => {
     zoomListener!();
     expect(busMarker.visible).toBe(true);
     expect(stopMarker.visible).toBe(true);
+  });
+
+  it("builds SVG badges for custom icons with circle/square/rectangle shapes and white backdrop", async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M4 6h16" fill="#0a79be"/></svg>', {
+        status: 200
+      })) as any;
+
+    try {
+      const dataUrl = buildSvgBadgeDataUrl('<path d="M4 6h16" fill="#0a79be"/>', "0 0 24 24", {
+        size: 28,
+        shape: "square",
+        bgColor: "#ffffff",
+        borderColor: "#0a79be",
+        borderWidth: 2,
+        borderRadius: 5,
+        padding: 3
+      });
+      const decoded = decodeURIComponent(dataUrl.replace("data:image/svg+xml;charset=UTF-8,", ""));
+      expect(decoded).toContain("<rect ");
+      expect(decoded).toContain("fill='#ffffff'");
+      expect(decoded).toContain("stroke='#0a79be'");
+      expect(decoded).toContain("rx='5'");
+
+      const cfg = normalizeCardConfig({
+        api_key: "test",
+        transit_motion: {
+          schedule_url: "",
+          routes: {
+            expo: {
+              icon: "cli:translink-logo",
+              icon_size: 24,
+              shape: "circle",
+              background_color: "#ffffff",
+              border_color: "#00539B",
+              border_width: 1.5,
+              padding: 2
+            }
+          }
+        }
+      });
+
+      let asyncResult: any = null;
+      const syncIcon = getTransitVehicleIcon(fakeGoogleMaps, "expo", cfg.transitMotion, "subway", (iconObj) => {
+        asyncResult = iconObj;
+      });
+      expect(syncIcon.url).toBe("/custom_local_icons/icons/translink-logo.svg");
+
+      await new Promise((r) => setTimeout(r, 10));
+      expect(asyncResult).not.toBeNull();
+      const asyncDecoded = decodeURIComponent(asyncResult.url.replace("data:image/svg+xml;charset=UTF-8,", ""));
+      expect(asyncDecoded).toContain("<circle ");
+      expect(asyncDecoded).toContain("fill='#ffffff'");
+      expect(asyncDecoded).toContain("stroke='#00539B'");
+
+      // Second call hits cache synchronously
+      const cachedBadge = resolveCustomSvgBadgeDataUrl("/custom_local_icons/icons/translink-logo.svg", {
+        size: 24,
+        shape: "circle",
+        bgColor: "#ffffff",
+        borderColor: "#00539B",
+        borderWidth: 1.5,
+        padding: 2
+      });
+      expect(cachedBadge?.startsWith("data:image/svg+xml;charset=UTF-8,")).toBe(true);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 });

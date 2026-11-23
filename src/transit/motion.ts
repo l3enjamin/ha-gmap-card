@@ -12,6 +12,18 @@ import {
 const MDI_SVG_CDN = "https://cdn.jsdelivr.net/npm/@mdi/svg@7.4.47/svg/";
 const scheduleCache = new Map<string, Promise<TransitSchedule | null>>();
 const mdiIconCache = new Map<string, string | Promise<string | null>>();
+const rawSvgCache = new Map<string, string | Promise<string | null>>();
+const customSvgBadgeCache = new Map<string, string>();
+
+export interface SvgBadgeStyleOptions {
+  size?: number;
+  shape?: string;
+  bgColor?: string;
+  borderColor?: string;
+  borderWidth?: number;
+  borderRadius?: number;
+  padding?: number;
+}
 
 export const GENERIC_SUBWAY_SVG =
   "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='26' height='26'><circle cx='12' cy='12' r='11' fill='%230072CE' stroke='%23ffffff' stroke-width='1.5'/><path d='M12 4c-3.5 0-6 .4-6 3.5v7c0 1.9 1.3 3.5 3 3.5L8 19.5v.5h8v-.5L15 18c1.7 0 3-1.6 3-3.5v-7c0-3.1-2.5-3.5-6-3.5zm-3 11a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4zm6 0a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4zm1-5H8V7.5h8V10z' fill='%23ffffff'/></svg>";
@@ -38,9 +50,113 @@ export function resolveCustomIconUrl(iconSpec: string): string | null {
   return null;
 }
 
+export function buildSvgBadgeDataUrl(
+  innerMarkup: string,
+  viewBox: string,
+  opts: SvgBadgeStyleOptions & { defaultBg?: string; fgColor?: string } = {}
+): string {
+  const sz = Number(opts.size) || 24;
+  const shape = opts.shape && opts.shape !== "auto" && opts.shape !== "icon" ? opts.shape : "circle";
+  const w = shape === "rectangle" ? Math.round(sz * 1.4) : sz;
+  const h = sz;
+  const bw = opts.borderWidth ?? (opts.borderColor ? 1.5 : 0);
+  const pad = opts.padding ?? (bw > 0 || opts.bgColor ? 2 : 0);
+  const bg = opts.bgColor || opts.defaultBg || "#ffffff";
+  const border = opts.borderColor || "#ffffff";
+  const rx = opts.borderRadius ?? (shape === "circle" ? Math.max(w, h) / 2 : 4);
+  const inset = bw + pad;
+  const innerW = Math.max(4, w - inset * 2);
+  const innerH = Math.max(4, h - inset * 2);
+
+  const bgShape =
+    shape === "circle"
+      ? `<circle cx='${w / 2}' cy='${h / 2}' r='${Math.max(1, Math.min(w, h) / 2 - bw / 2)}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}'` : ""}/>`
+      : `<rect x='${bw / 2}' y='${bw / 2}' width='${Math.max(1, w - bw)}' height='${Math.max(1, h - bw)}' rx='${rx}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}'` : ""}/>`;
+
+  const fgAttr = opts.fgColor ? ` fill='${opts.fgColor}'` : "";
+  const svg =
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${w} ${h}' width='${w}' height='${h}'>` +
+    bgShape +
+    `<svg x='${inset}' y='${inset}' width='${innerW}' height='${innerH}' viewBox='${viewBox}' preserveAspectRatio='xMidYMid meet'${fgAttr}>${innerMarkup}</svg>` +
+    `</svg>`;
+  return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
+}
+
+function parseSvgParts(svgText: string): { viewBox: string; inner: string } {
+  const openTagMatch = svgText.match(/<svg([^>]*)>/i);
+  const attrs = openTagMatch ? openTagMatch[1] : "";
+  const vbMatch = attrs.match(/viewBox=["']([^"']+)["']/i);
+  let viewBox = vbMatch ? vbMatch[1].trim() : "";
+  if (!viewBox) {
+    const wMatch = attrs.match(/width=["']([\d.]+)/i);
+    const hMatch = attrs.match(/height=["']([\d.]+)/i);
+    const w = wMatch ? wMatch[1] : "24";
+    const h = hMatch ? hMatch[1] : "24";
+    viewBox = `0 0 ${w} ${h}`;
+  }
+  const innerMatch = svgText.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i);
+  return { viewBox, inner: innerMatch ? innerMatch[1] : "" };
+}
+
+export function resolveCustomSvgBadgeDataUrl(
+  svgUrl: string,
+  opts: SvgBadgeStyleOptions = {},
+  onReady?: (url: string) => void
+): string | null {
+  if (!svgUrl || typeof svgUrl !== "string") return null;
+  const sz = Number(opts.size) || 24;
+  const shape = opts.shape || "circle";
+  const bg = opts.bgColor || "#ffffff";
+  const border = opts.borderColor || "";
+  const bw = opts.borderWidth ?? "";
+  const br = opts.borderRadius ?? "";
+  const pad = opts.padding ?? "";
+  const cacheKey = `${svgUrl}|${sz}|${shape}|${bg}|${border}|${bw}|${br}|${pad}`;
+
+  const cachedBadge = customSvgBadgeCache.get(cacheKey);
+  if (cachedBadge) return cachedBadge;
+
+  const formatFromText = (svgText: string): string => {
+    const { viewBox, inner } = parseSvgParts(svgText);
+    const dataUrl = buildSvgBadgeDataUrl(inner, viewBox, { ...opts, defaultBg: "#ffffff" });
+    customSvgBadgeCache.set(cacheKey, dataUrl);
+    return dataUrl;
+  };
+
+  const cachedRaw = rawSvgCache.get(svgUrl);
+  if (typeof cachedRaw === "string") {
+    return formatFromText(cachedRaw);
+  }
+  if (cachedRaw && typeof (cachedRaw as Promise<string | null>).then === "function") {
+    if (onReady) {
+      (cachedRaw as Promise<string | null>).then((txt) => {
+        if (txt) onReady(formatFromText(txt));
+      });
+    }
+    return null;
+  }
+
+  const fetchPromise = fetch(svgUrl)
+    .then((r) => (r.ok ? r.text() : null))
+    .then((svgText) => {
+      if (!svgText) return null;
+      rawSvgCache.set(svgUrl, svgText);
+      return svgText;
+    })
+    .catch(() => null);
+
+  rawSvgCache.set(svgUrl, fetchPromise);
+  if (onReady) {
+    fetchPromise.then((txt) => {
+      if (txt) onReady(formatFromText(txt));
+    });
+  }
+  return null;
+}
+
 export function resolveMdiIconDataUrl(
   iconSpec: string,
-  opts: { size?: number; bgColor?: string; fgColor?: string; borderColor?: string; badge?: boolean } = {},
+  opts: SvgBadgeStyleOptions & { fgColor?: string; badge?: boolean } = {},
   onReady?: (url: string) => void
 ): string | null {
   if (!iconSpec || typeof iconSpec !== "string") return null;
@@ -54,7 +170,11 @@ export function resolveMdiIconDataUrl(
   const fgColor = opts.fgColor || (bgColor ? "#ffffff" : "#1E88E5");
   const borderColor = opts.borderColor || "#ffffff";
   const badge = opts.badge !== false && Boolean(bgColor);
-  const cacheKey = `${mdiName}|${sz}|${bgColor}|${fgColor}|${borderColor}|${badge ? 1 : 0}`;
+  const shape = opts.shape || "circle";
+  const bw = opts.borderWidth ?? (badge ? 1.5 : 0);
+  const br = opts.borderRadius ?? "";
+  const pad = opts.padding ?? "";
+  const cacheKey = `${mdiName}|${sz}|${bgColor}|${fgColor}|${borderColor}|${badge ? 1 : 0}|${shape}|${bw}|${br}|${pad}`;
 
   if (mdiIconCache.has(cacheKey)) {
     const cached = mdiIconCache.get(cacheKey);
@@ -73,12 +193,21 @@ export function resolveMdiIconDataUrl(
       if (!svgText) return null;
       const innerMatch = svgText.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i);
       const inner = innerMatch ? innerMatch[1].replace(/fill="[^"]*"/g, "") : "";
-      const outSvg = badge
-        ? `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}'>` +
-          `<circle cx='12' cy='12' r='11' fill='${bgColor}' stroke='${borderColor}' stroke-width='1.5'/>` +
-          `<g transform='translate(4.2,4.2) scale(0.65)' fill='${fgColor}'>${inner}</g></svg>`
-        : `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}' fill='${fgColor}'>${inner}</svg>`;
-      const dataUrl = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(outSvg);
+      const dataUrl = badge
+        ? buildSvgBadgeDataUrl(inner, "0 0 24 24", {
+            size: sz,
+            shape,
+            bgColor,
+            borderColor,
+            borderWidth: bw,
+            borderRadius: opts.borderRadius,
+            padding: opts.padding ?? 3,
+            fgColor
+          })
+        : "data:image/svg+xml;charset=UTF-8," +
+          encodeURIComponent(
+            `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}' fill='${fgColor}'>${inner}</svg>`
+          );
       mdiIconCache.set(cacheKey, dataUrl);
       return dataUrl;
     })
@@ -105,6 +234,7 @@ export function getTransitVehicleIcon(
   const vehicles = motionCfg.vehicles || {};
 
   const iconSpec =
+    routeCfg.image ||
     routeCfg.icon ||
     vehicles[routeKey] ||
     vehicles[rKeyLower] ||
@@ -115,15 +245,45 @@ export function getTransitVehicleIcon(
     (routeType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
 
   const sz = Number(routeCfg.iconSize || 26);
-  const makeIconObj = (url: string) => ({
+  const shape = routeCfg.shape ?? motionCfg.vehicleShape;
+  const bgColor = routeCfg.backgroundColor ?? motionCfg.vehicleBackgroundColor;
+  const borderColor = routeCfg.borderColor ?? motionCfg.vehicleBorderColor;
+  const borderWidth = routeCfg.borderWidth ?? motionCfg.vehicleBorderWidth;
+  const borderRadius = routeCfg.borderRadius ?? motionCfg.vehicleBorderRadius;
+  const padding = routeCfg.padding ?? motionCfg.vehiclePadding;
+  const w = shape === "rectangle" ? Math.round(sz * 1.4) : sz;
+  const hasBadgeStyle = Boolean(
+    (shape && shape !== "auto" && shape !== "icon") ||
+      bgColor ||
+      borderColor ||
+      borderWidth !== undefined ||
+      borderRadius !== undefined ||
+      padding !== undefined
+  );
+
+  const makeIconObj = (url: string, width = sz, height = sz) => ({
     url,
-    scaledSize: new googleMaps.Size(sz, sz),
-    anchor: new googleMaps.Point(sz / 2, sz / 2)
+    scaledSize: new googleMaps.Size(width, height),
+    anchor: new googleMaps.Point(width / 2, height / 2)
   });
 
   const customUrl = typeof iconSpec === "string" ? resolveCustomIconUrl(iconSpec) : null;
-  if (customUrl) {
-    return makeIconObj(customUrl);
+  const svgUrl =
+    customUrl ||
+    (typeof iconSpec === "string" && /\.svg(\?|$)/i.test(iconSpec) && !iconSpec.startsWith("data:") ? iconSpec : null);
+
+  if (svgUrl) {
+    if (hasBadgeStyle) {
+      const badgedUrl = resolveCustomSvgBadgeDataUrl(
+        svgUrl,
+        { size: sz, shape, bgColor, borderColor, borderWidth, borderRadius, padding },
+        (dataUrl) => {
+          if (onAsyncReady && dataUrl) onAsyncReady(makeIconObj(dataUrl, w, sz));
+        }
+      );
+      if (badgedUrl) return makeIconObj(badgedUrl, w, sz);
+    }
+    return makeIconObj(svgUrl);
   }
 
   if (typeof iconSpec === "string" && iconSpec.trim().startsWith("mdi:")) {
@@ -131,12 +291,22 @@ export function getTransitVehicleIcon(
       DEFAULT_VEHICLE_ICONS[rKeyLower] ||
       DEFAULT_VEHICLE_ICONS[routeType] ||
       (routeType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
-    const bgColor = routeCfg.color || (routeType === "bus" ? "#008542" : "#0072CE");
+    const resolvedBg = bgColor || routeCfg.color || (routeType === "bus" ? "#008542" : "#0072CE");
     const cachedUrl = resolveMdiIconDataUrl(
       iconSpec,
-      { size: sz, bgColor, fgColor: "#ffffff", badge: true },
+      {
+        size: sz,
+        shape,
+        bgColor: resolvedBg,
+        fgColor: "#ffffff",
+        borderColor: borderColor || "#ffffff",
+        borderWidth,
+        borderRadius,
+        padding,
+        badge: true
+      },
       (dataUrl) => {
-        if (onAsyncReady && dataUrl) onAsyncReady(makeIconObj(dataUrl));
+        if (onAsyncReady && dataUrl) onAsyncReady(makeIconObj(dataUrl, w, sz));
       }
     );
     return makeIconObj(cachedUrl || fallbackUrl);

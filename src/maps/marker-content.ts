@@ -45,14 +45,14 @@ export function createMarkerElement(
   `;
 
   const iconSize = entityConfig.iconSize || 32;
-  const bg = entityConfig.backgroundColor || (isDark ? "rgba(30, 30, 30, 0.92)" : "#ffffff");
+  const bg = entityConfig.backgroundColor || "#ffffff";
   const defaultBorder = isDark ? "rgba(255, 255, 255, 0.35)" : "rgba(0, 0, 0, 0.25)";
   const borderColor = entityConfig.borderColor || defaultBorder;
   const mType = entityConfig.markerType;
   const customIconSvgUrl = entityConfig.icon ? resolveCustomIconUrl(entityConfig.icon) : null;
   const picture = resolveEntityPicture(entityConfig, stateObj) || customIconSvgUrl || undefined;
 
-  if (mType === "circle" || entityConfig.showIcon === false) {
+  if ((mType === "circle" && !picture) || entityConfig.showIcon === false) {
     const dotSize = entityConfig.iconSize || 10;
     const dot = document.createElement("div");
     dot.className = "ha-gmap-marker-circle";
@@ -101,9 +101,13 @@ export function createMarkerElement(
       const isVectorSvg =
         /\.svg(\?|$)/i.test(picture) &&
         entityConfig.pictureShape !== "circle" &&
+        mType !== "circle" &&
+        mType !== "square" &&
         entityConfig.borderWidth === undefined &&
         !entityConfig.backgroundColor &&
-        mType !== "square";
+        !entityConfig.borderColor &&
+        entityConfig.picturePadding === undefined &&
+        entityConfig.pictureBorderRadius === undefined;
 
       if (isVectorSvg) {
         img.style.cssText = `
@@ -115,7 +119,7 @@ export function createMarkerElement(
       } else {
         const br = mType === "square" ? `${entityConfig.pictureBorderRadius ?? 6}px` : "50%";
         const bw = entityConfig.borderWidth ?? 2;
-        const pad = entityConfig.picturePadding ?? 0;
+        const pad = entityConfig.picturePadding ?? 2;
         img.style.cssText = `
           width: ${iconSize}px;
           height: ${iconSize}px;

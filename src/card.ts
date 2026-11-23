@@ -4,7 +4,12 @@ import { FilterController } from "./filters/controller";
 import { loadGoogleMaps } from "./maps/loader";
 import { BatchedDomMarkerLayer, createMarkerElement } from "./maps/marker-content";
 import { PopupController } from "./popup/controller";
-import { resolveCustomIconUrl, resolveMdiIconDataUrl, TransitMotionEngine } from "./transit/motion";
+import {
+  resolveCustomIconUrl,
+  resolveCustomSvgBadgeDataUrl,
+  resolveMdiIconDataUrl,
+  TransitMotionEngine
+} from "./transit/motion";
 import { extractRouteKeys, findUpcomingArrivalsForStation, matchEntityPattern } from "./transit/schedule";
 
 const geoJsonCache = new Map<string, Promise<any>>();
@@ -131,21 +136,7 @@ export class HaGmapCard extends LitElement {
         this._transitMotion.syncConfig(this._config.transitMotion);
       }
 
-      const nextGeoSig = JSON.stringify(
-        this._config.geojsonLayers.map((g) => [
-          g.url,
-          g.strokeColor,
-          g.strokeWidth,
-          g.icon,
-          g.image,
-          g.pointShape,
-          g.pointSize,
-          g.pointColor,
-          g.stationIcon,
-          g.stopIcon,
-          g.filterGroup
-        ])
-      );
+      const nextGeoSig = this.computeGeoSignature();
       if (nextGeoSig !== this._geoSignature) {
         this.clearGeoJsonLayers();
         this.loadGeoJsonLayers();
@@ -529,9 +520,8 @@ export class HaGmapCard extends LitElement {
     this._routePolylines.clear();
   }
 
-  private loadGeoJsonLayers() {
-    if (!this._map || !this._google) return;
-    this._geoSignature = JSON.stringify(
+  private computeGeoSignature(): string {
+    return JSON.stringify(
       this._config.geojsonLayers.map((g) => [
         g.url,
         g.strokeColor,
@@ -541,11 +531,20 @@ export class HaGmapCard extends LitElement {
         g.pointShape,
         g.pointSize,
         g.pointColor,
+        g.borderColor,
+        g.borderWidth,
+        g.borderRadius,
+        g.padding,
         g.stationIcon,
         g.stopIcon,
         g.filterGroup
       ])
     );
+  }
+
+  private loadGeoJsonLayers() {
+    if (!this._map || !this._google) return;
+    this._geoSignature = this.computeGeoSignature();
 
     const isDark = this.isDarkMode();
 
@@ -704,8 +703,19 @@ export class HaGmapCard extends LitElement {
     const pColor = layerCfg.pointColor || feature.getProperty("color") || sColor;
     const bColor = layerCfg.borderColor || "#ffffff";
     const bWidth = layerCfg.borderWidth ?? 1.2;
+    const bRadius = layerCfg.borderRadius;
+    const pad = layerCfg.padding;
     const pShape = layerCfg.pointShape;
     const sz = layerCfg.pointSize ?? (isStation ? layerCfg.stationSize || 18 : layerCfg.stopSize || 14);
+    const badgeW = pShape === "rectangle" ? Math.round(sz * 1.4) : sz;
+    const hasBadgeStyle = Boolean(
+      (pShape && pShape !== "auto" && pShape !== "icon") ||
+        layerCfg.pointColor ||
+        layerCfg.borderColor ||
+        layerCfg.borderWidth !== undefined ||
+        bRadius !== undefined ||
+        pad !== undefined
+    );
 
     // Neutral `image` / `icon` (supports `cli:` custom_local_icons and `mdi:`) with legacy fallback
     const legacySpec = isStation ? layerCfg.stationIcon : layerCfg.stopIcon;
@@ -722,6 +732,40 @@ export class HaGmapCard extends LitElement {
       (legacySpec && legacySpec.startsWith("mdi:") ? legacySpec : undefined);
 
     if (imageUrl && pShape !== "icon") {
+      if (hasBadgeStyle && /\.svg(\?|$)/i.test(imageUrl) && !imageUrl.startsWith("data:")) {
+        const badgedUrl = resolveCustomSvgBadgeDataUrl(
+          imageUrl,
+          {
+            size: sz,
+            shape: pShape,
+            bgColor: layerCfg.pointColor,
+            borderColor: layerCfg.borderColor,
+            borderWidth: layerCfg.borderWidth,
+            borderRadius: bRadius,
+            padding: pad
+          },
+          (asyncUrl) => {
+            dataLayer.overrideStyle(feature, {
+              icon: {
+                url: asyncUrl,
+                scaledSize: new this._google.maps.Size(badgeW, sz),
+                anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
+              }
+            });
+          }
+        );
+        if (badgedUrl) {
+          return {
+            icon: {
+              url: badgedUrl,
+              scaledSize: new this._google.maps.Size(badgeW, sz),
+              anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
+            },
+            title,
+            clickable
+          };
+        }
+      }
       const imgKey = `geo_img|${imageUrl}|${sz}`;
       let imgIcon = this._geoIconCache.get(imgKey);
       if (!imgIcon) {
@@ -738,13 +782,23 @@ export class HaGmapCard extends LitElement {
     if (mdiSpec) {
       const cached = resolveMdiIconDataUrl(
         mdiSpec,
-        { size: sz, bgColor: pColor, fgColor: "#ffffff", borderColor: bColor, badge: pShape !== "icon" },
+        {
+          size: sz,
+          shape: pShape,
+          bgColor: pColor,
+          fgColor: "#ffffff",
+          borderColor: bColor,
+          borderWidth: layerCfg.borderWidth,
+          borderRadius: bRadius,
+          padding: pad,
+          badge: pShape !== "icon"
+        },
         (asyncUrl) => {
           dataLayer.overrideStyle(feature, {
             icon: {
               url: asyncUrl,
-              scaledSize: new this._google.maps.Size(sz, sz),
-              anchor: new this._google.maps.Point(sz / 2, sz / 2)
+              scaledSize: new this._google.maps.Size(badgeW, sz),
+              anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
             }
           });
         }
@@ -753,8 +807,8 @@ export class HaGmapCard extends LitElement {
         return {
           icon: {
             url: cached,
-            scaledSize: new this._google.maps.Size(sz, sz),
-            anchor: new this._google.maps.Point(sz / 2, sz / 2)
+            scaledSize: new this._google.maps.Size(badgeW, sz),
+            anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
           },
           title,
           clickable

@@ -201,7 +201,9 @@ describe("Card Config Normalization & Aliasing", () => {
           point_size: 20,
           point_color: "#00897B",
           border_color: "#ffffff",
-          border_width: 2
+          border_width: 2,
+          border_radius: 6,
+          padding: 3
         }
       ]
     });
@@ -212,7 +214,58 @@ describe("Card Config Normalization & Aliasing", () => {
       pointSize: 20,
       pointColor: "#00897B",
       borderColor: "#ffffff",
-      borderWidth: 2
+      borderWidth: 2,
+      borderRadius: 6,
+      padding: 3
+    });
+
+    const uniformBadgeCfg = normalizeCardConfig({
+      api_key: "test",
+      transit_motion: {
+        shape: "circle",
+        background_color: "#ffffff",
+        border_color: "#0a79be",
+        border_width: 2,
+        padding: 3,
+        routes: {
+          expo: {
+            icon: "cli:translink-expo",
+            shape: "square",
+            background_color: "#ffffff",
+            border_color: "#00539B",
+            border_width: 1,
+            border_radius: 4,
+            padding: 2
+          }
+        }
+      },
+      entities: [
+        {
+          entity: "sensor.chevron_regular_gas",
+          border_radius: 10,
+          padding: 4
+        }
+      ]
+    });
+    expect(uniformBadgeCfg.transitMotion).toMatchObject({
+      vehicleShape: "circle",
+      vehicleBackgroundColor: "#ffffff",
+      vehicleBorderColor: "#0a79be",
+      vehicleBorderWidth: 2,
+      vehiclePadding: 3
+    });
+    expect(uniformBadgeCfg.transitMotion.routes.expo).toMatchObject({
+      icon: "cli:translink-expo",
+      shape: "square",
+      backgroundColor: "#ffffff",
+      borderColor: "#00539B",
+      borderWidth: 1,
+      borderRadius: 4,
+      padding: 2
+    });
+    expect(uniformBadgeCfg.entities[0]).toMatchObject({
+      pictureBorderRadius: 10,
+      picturePadding: 4
     });
 
     expect(cfg.transitMotion).toMatchObject({

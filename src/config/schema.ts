@@ -42,6 +42,8 @@ export interface GeoJsonLayerConfig {
   pointColor?: string;
   borderColor?: string;
   borderWidth?: number;
+  borderRadius?: number;
+  padding?: number;
   stationIcon?: string;
   stopIcon?: string;
   stationSize: number;
@@ -66,8 +68,15 @@ export interface TransitRouteConfig {
   label?: string;
   name?: string;
   icon?: string;
+  image?: string;
   color?: string;
   iconSize?: number;
+  shape?: MarkerShapeType;
+  backgroundColor?: string;
+  borderColor?: string;
+  borderWidth?: number;
+  borderRadius?: number;
+  padding?: number;
   enabled?: boolean;
 }
 
@@ -80,6 +89,12 @@ export interface TransitMotionConfig {
   scheduleUrl?: string;
   filterGroup?: string;
   simulate247: boolean;
+  vehicleShape?: MarkerShapeType;
+  vehicleBackgroundColor?: string;
+  vehicleBorderColor?: string;
+  vehicleBorderWidth?: number;
+  vehicleBorderRadius?: number;
+  vehiclePadding?: number;
   vehicles: Record<string, string>;
   routes: Record<string, TransitRouteConfig>;
 }
@@ -223,6 +238,8 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
       pointColor: l.point_color || l.pointColor || l.background_color || l.backgroundColor,
       borderColor: l.border_color || l.borderColor,
       borderWidth: rawBorderWidth !== undefined ? Number(rawBorderWidth) : undefined,
+      borderRadius: parseOptionalNumber(l.border_radius ?? l.borderRadius ?? l.picture_border_radius ?? l.pictureBorderRadius) ?? undefined,
+      padding: parseOptionalNumber(l.padding ?? l.picture_padding ?? l.picturePadding) ?? undefined,
       stationIcon: l.station_icon || l.stationIcon,
       stopIcon: l.stop_icon || l.stopIcon,
       stationSize: Number(l.station_size ?? l.station_icon_size ?? rawPointSize ?? 18),
@@ -263,8 +280,15 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
           label: r.label || r.name,
           name: r.name || r.label,
           icon: r.icon,
+          image: r.image || r.picture,
           color: r.color || r.icon_color,
           iconSize: rawSz !== undefined ? Number(rawSz) : undefined,
+          shape: r.shape || r.marker_type || r.markerType || r.point_shape || r.pointShape,
+          backgroundColor: r.background_color || r.backgroundColor || r.point_color || r.pointColor,
+          borderColor: r.border_color || r.borderColor,
+          borderWidth: parseOptionalNumber(r.border_width ?? r.borderWidth) ?? undefined,
+          borderRadius: parseOptionalNumber(r.border_radius ?? r.borderRadius) ?? undefined,
+          padding: parseOptionalNumber(r.padding) ?? undefined,
           enabled: r.enabled !== false
         };
       }
@@ -280,6 +304,12 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
     scheduleUrl: tmRaw?.schedule_url || tmRaw?.scheduleUrl || cfg.transit_schedule || "/local/gtfs2/transit_schedule.json",
     filterGroup: tmRaw?.filter_group || tmRaw?.filterGroup || tmRaw?.group || "vehicles",
     simulate247: Boolean(tmRaw?.simulate_24_7 ?? tmRaw?.simulate247 ?? false),
+    vehicleShape: tmRaw?.vehicle_shape || tmRaw?.vehicleShape || tmRaw?.marker_type || tmRaw?.markerType || tmRaw?.shape,
+    vehicleBackgroundColor: tmRaw?.vehicle_background_color || tmRaw?.vehicleBackgroundColor || tmRaw?.background_color || tmRaw?.backgroundColor,
+    vehicleBorderColor: tmRaw?.vehicle_border_color || tmRaw?.vehicleBorderColor || tmRaw?.border_color || tmRaw?.borderColor,
+    vehicleBorderWidth: parseOptionalNumber(tmRaw?.vehicle_border_width ?? tmRaw?.vehicleBorderWidth ?? tmRaw?.border_width ?? tmRaw?.borderWidth) ?? undefined,
+    vehicleBorderRadius: parseOptionalNumber(tmRaw?.vehicle_border_radius ?? tmRaw?.vehicleBorderRadius ?? tmRaw?.border_radius ?? tmRaw?.borderRadius) ?? undefined,
+    vehiclePadding: parseOptionalNumber(tmRaw?.vehicle_padding ?? tmRaw?.vehiclePadding ?? tmRaw?.padding) ?? undefined,
     vehicles,
     routes
   };
@@ -312,9 +342,9 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
       backgroundColor: merged.background_color || merged.backgroundColor || merged.card_background,
       borderColor: merged.border_color || merged.borderColor,
       borderWidth,
-      pictureBorderRadius: merged.picture_border_radius ?? merged.pictureBorderRadius,
+      pictureBorderRadius: merged.picture_border_radius ?? merged.pictureBorderRadius ?? merged.border_radius ?? merged.borderRadius,
       pictureBorderWidth,
-      picturePadding: merged.picture_padding ?? merged.picturePadding,
+      picturePadding: merged.picture_padding ?? merged.picturePadding ?? merged.padding,
       pictureHeight: merged.picture_height ?? merged.pictureHeight,
       pictureMaxWidth: merged.picture_max_width ?? merged.pictureMaxWidth,
       minZoom: parseOptionalNumber(rawMinZoom),
