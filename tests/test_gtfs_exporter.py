@@ -96,3 +96,43 @@ def test_parsers_handle_edge_values():
     assert parse_coord(0.0, 0.0) is None
     assert normalize_hex_color("007c9f") == "#007c9f"
     assert normalize_hex_color("invalid", "#000000") == "#000000"
+
+
+def test_slug_collision_and_route_filter_long_name(tmp_path: Path):
+    zip_path = _make_gtfs_zip(
+        tmp_path / "collision.zip",
+        {
+            "routes.txt": (
+                "route_id,route_short_name,route_long_name,route_type,route_color\n"
+                "R_A,L1,Line 1,1,111111\n"
+                "R_B,L1,Line-1,1,222222\n"
+                "B_EXPRESS,430,Metrotown Express,3,1E88E5\n"
+            ),
+            "stops.txt": "stop_id,stop_name,stop_lat,stop_lon\nS1,A,49.28,-123.12\nS2,B,49.27,-123.11\n",
+            "calendar.txt": "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday\n1,1,1,1,1,1,0,0\n",
+            "trips.txt": "route_id,service_id,trip_id,trip_headsign\nR_A,1,T1,A\nR_B,1,T2,B\nB_EXPRESS,1,T3,Exp\n",
+            "stop_times.txt": (
+                "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+                "T1,08:00:00,08:00:00,S1,1\nT1,08:10:00,08:10:00,S2,2\n"
+                "T2,08:00:00,08:00:00,S1,1\nT2,08:10:00,08:10:00,S2,2\n"
+                "T3,08:00:00,08:00:00,S1,1\nT3,08:10:00,08:10:00,S2,2\n"
+            ),
+        },
+    )
+    res = export_gtfs(
+        str(zip_path),
+        str(tmp_path / "out_col"),
+        route_types=["1"],
+        route_filter=["Line 1", "Line-1", "Metrotown Express"],
+    )
+    assert res.routes_exported == 3
+    sched = json.loads((tmp_path / "out_col" / "transit_schedule.json").read_text(encoding="utf-8"))
+    assert len(sched["routes"]) == 3
+    assert "line_1" in sched["routes"]
+    assert "line_1_r_b" in sched["routes"]
+    assert "metrotown_express" in sched["routes"]
+
+    # Explicit empty route_types=[] should not fall back to default rail types
+    res_empty = export_gtfs(str(zip_path), str(tmp_path / "out_empty"), route_types=[])
+    assert res_empty.routes_exported == 3
+

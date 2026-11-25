@@ -61,7 +61,8 @@ class HaGmapConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             elif not src.startswith(("http://", "https://")):
                 p = Path(src) if Path(src).is_absolute() else Path(self.hass.config.path(src))
-                if not p.exists():
+                exists = await self.hass.async_add_executor_job(p.exists)
+                if not exists:
                     errors["base"] = "cannot_connect"
 
             if not errors:

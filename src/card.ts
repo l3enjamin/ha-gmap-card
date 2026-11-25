@@ -24,7 +24,8 @@ function escapeHtml(str: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function getControlPosition(googleMaps: any, posName?: string): any {
@@ -42,7 +43,8 @@ export class HaGmapCard extends LitElement {
   private _markerConfigs = new Map<string, CardEntityConfig>();
   private _lastEntityState = new Map<string, any>();
   private _domMarkerLayer: BatchedDomMarkerLayer | null = null;
-  private _geoLayers = new Map<string, any>();
+  private _geoLayers = new Map<string, { layer: any; cfg: GeoJsonLayerConfig }>();
+  private _geoZoomListeners: any[] = [];
   private _geoIconCache = new Map<string, any>();
   private _routePolylines = new Map<string, number[][][]>();
   private _popupController: PopupController | null = null;
@@ -150,6 +152,9 @@ export class HaGmapCard extends LitElement {
       this.updateEntityMarkers();
     } else {
       this.requestUpdate();
+      if (this.hasUpdated && this._config.apiKey) {
+        this.initMap();
+      }
     }
   }
 
@@ -255,7 +260,10 @@ export class HaGmapCard extends LitElement {
       } catch (_) {}
       this._trafficLayer = null;
     }
-    this._filterController = null;
+    if (this._filterController) {
+      this._filterController.destroy();
+      this._filterController = null;
+    }
     this._map = null;
     this._initPromise = null;
     this._initialCenterApplied = false;
@@ -504,10 +512,9 @@ export class HaGmapCard extends LitElement {
       }
     }
 
-    for (const [url, layer] of this._geoLayers.entries()) {
-      const geoCfg = this._config.geojsonLayers.find((g) => g.url === url);
-      if (geoCfg?.filterGroup === filterId) {
-        layer.setMap(active ? this._map : null);
+    for (const entry of this._geoLayers.values()) {
+      if (entry.cfg?.filterGroup === filterId) {
+        entry.layer.setMap(active ? this._map : null);
       }
     }
 
@@ -517,9 +524,15 @@ export class HaGmapCard extends LitElement {
   }
 
   private clearGeoJsonLayers() {
-    for (const layer of this._geoLayers.values()) {
+    for (const listener of this._geoZoomListeners) {
       try {
-        layer.setMap(null);
+        listener?.remove?.();
+      } catch (_) {}
+    }
+    this._geoZoomListeners = [];
+    for (const entry of this._geoLayers.values()) {
+      try {
+        entry.layer.setMap(null);
       } catch (_) {}
     }
     this._geoLayers.clear();
@@ -530,8 +543,14 @@ export class HaGmapCard extends LitElement {
     return JSON.stringify(
       this._config.geojsonLayers.map((g) => [
         g.url,
+        g.name,
+        g.label,
+        g.routeKey,
         g.strokeColor,
         g.strokeWidth,
+        g.fillColor,
+        g.fillOpacity,
+        g.showPopup,
         g.icon,
         g.image,
         g.pointShape,
@@ -543,6 +562,8 @@ export class HaGmapCard extends LitElement {
         g.padding,
         g.stationIcon,
         g.stopIcon,
+        g.stationSize,
+        g.stopSize,
         g.filterGroup,
         g.showLabels,
         g.labelSpacing,
@@ -565,8 +586,10 @@ export class HaGmapCard extends LitElement {
 
     const isDark = this.isDarkMode();
 
-    for (const layerCfg of this._config.geojsonLayers) {
+    for (let idx = 0; idx < this._config.geojsonLayers.length; idx++) {
+      const layerCfg = this._config.geojsonLayers[idx];
       if (!layerCfg.url) continue;
+      const layerKey = `${idx}|${layerCfg.url}`;
       const isActive = !layerCfg.filterGroup || !this._filterController || this._filterController.isFilterActive(layerCfg.filterGroup);
       const dataLayer = new this._google.maps.Data({ map: isActive ? this._map : null });
 
@@ -638,27 +661,32 @@ export class HaGmapCard extends LitElement {
         });
       }
 
-      this._geoLayers.set(layerCfg.url, dataLayer);
+      this._geoLayers.set(layerKey, { layer: dataLayer, cfg: layerCfg });
 
       let fetchPromise = geoJsonCache.get(layerCfg.url);
       if (!fetchPromise) {
         fetchPromise = fetch(layerCfg.url)
           .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null);
+          .catch(() => null)
+          .then((data) => {
+            if (!data) geoJsonCache.delete(layerCfg.url);
+            return data;
+          });
         geoJsonCache.set(layerCfg.url, fetchPromise);
       }
 
       fetchPromise.then((geoData) => {
-        if (!geoData || this._geoLayers.get(layerCfg.url) !== dataLayer) return;
+        if (!geoData || this._geoLayers.get(layerKey)?.layer !== dataLayer) return;
         const preparedGeo = this.prepareGeoJsonWithLabels(geoData, layerCfg);
         dataLayer.addGeoJson(preparedGeo);
         this.indexGeoJsonPolylines(geoData, layerCfg);
         if (layerCfg.labelMinZoom !== undefined && typeof this._map?.addListener === "function") {
-          this._map.addListener("zoom_changed", () => {
-            if (this._geoLayers.get(layerCfg.url) === dataLayer) {
+          const handle = this._map.addListener("zoom_changed", () => {
+            if (this._geoLayers.get(layerKey)?.layer === dataLayer) {
               dataLayer.setStyle((feature: any) => this.computeGeoFeatureStyle(dataLayer, feature, layerCfg));
             }
           });
+          this._geoZoomListeners.push(handle);
         }
       });
     }
@@ -787,15 +815,18 @@ export class HaGmapCard extends LitElement {
         let badgeIcon = this._geoIconCache.get(badgeKey);
         if (!badgeIcon) {
           const safeText = escapeHtml(badgeText);
+          const safeBg = escapeHtml(badgeColor);
+          const safeTextColor = escapeHtml(textColor);
+          const safeBorderColor = escapeHtml(lBorderColor);
           const halfBw = lBorderWidth / 2;
           const shapeEl =
             lShape === "circle"
-              ? `<circle cx='${w / 2}' cy='${h / 2}' r='${Math.max(1, Math.min(w, h) / 2 - halfBw)}' fill='${badgeColor}'${lBorderWidth > 0 ? ` stroke='${lBorderColor}' stroke-width='${lBorderWidth}'` : ""}/>`
-              : `<rect x='${halfBw}' y='${halfBw}' width='${Math.max(1, w - lBorderWidth)}' height='${Math.max(1, h - lBorderWidth)}' rx='${rx}' fill='${badgeColor}'${lBorderWidth > 0 ? ` stroke='${lBorderColor}' stroke-width='${lBorderWidth}'` : ""}/>`;
+              ? `<circle cx='${w / 2}' cy='${h / 2}' r='${Math.max(1, Math.min(w, h) / 2 - halfBw)}' fill='${safeBg}'${lBorderWidth > 0 ? ` stroke='${safeBorderColor}' stroke-width='${lBorderWidth}'` : ""}/>`
+              : `<rect x='${halfBw}' y='${halfBw}' width='${Math.max(1, w - lBorderWidth)}' height='${Math.max(1, h - lBorderWidth)}' rx='${rx}' fill='${safeBg}'${lBorderWidth > 0 ? ` stroke='${safeBorderColor}' stroke-width='${lBorderWidth}'` : ""}/>`;
           const badgeSvg =
             `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>` +
             shapeEl +
-            `<text x='${w / 2}' y='${h / 2}' dominant-baseline='central' text-anchor='middle' fill='${textColor}' font-family='-apple-system,BlinkMacSystemFont,Roboto,sans-serif' font-size='${fontSize}' font-weight='700'>${safeText}</text>` +
+            `<text x='${w / 2}' y='${h / 2}' dominant-baseline='central' text-anchor='middle' fill='${safeTextColor}' font-family='-apple-system,BlinkMacSystemFont,Roboto,sans-serif' font-size='${fontSize}' font-weight='700'>${safeText}</text>` +
             `</svg>`;
           badgeIcon = {
             url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(badgeSvg),
@@ -946,9 +977,11 @@ export class HaGmapCard extends LitElement {
       const shapeKey = `geo_shape|${pShape}|${w}|${h}|${pColor}|${bColor}|${bWidth}`;
       let shapeIcon = this._geoIconCache.get(shapeKey);
       if (!shapeIcon) {
+        const safePColor = escapeHtml(String(pColor));
+        const safeBColor = escapeHtml(String(bColor));
         const svg =
           `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>` +
-          `<rect x='1' y='1' width='${w - 2}' height='${h - 2}' rx='3' fill='${pColor}' stroke='${bColor}' stroke-width='${bWidth}'/>` +
+          `<rect x='1' y='1' width='${w - 2}' height='${h - 2}' rx='3' fill='${safePColor}' stroke='${safeBColor}' stroke-width='${bWidth}'/>` +
           `</svg>`;
         shapeIcon = {
           url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
@@ -964,9 +997,10 @@ export class HaGmapCard extends LitElement {
       const cacheKey = `station_t|${pColor}|${sz}`;
       let iconObj = this._geoIconCache.get(cacheKey);
       if (!iconObj) {
+        const safePColor = escapeHtml(String(pColor));
         const tSvg =
           `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}'>` +
-          `<rect width='24' height='24' rx='4' fill='${pColor}'/>` +
+          `<rect width='24' height='24' rx='4' fill='${safePColor}'/>` +
           `<path d='M4.5 6.5h15v3h-5.7v9h-3.6v-9H4.5v-3z' fill='#FFFFFF'/></svg>`;
         iconObj = {
           url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(tSvg),

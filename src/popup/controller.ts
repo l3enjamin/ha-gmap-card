@@ -165,6 +165,10 @@ export class PopupController {
         } catch (err: any) {
           contentBody.textContent = `Failed to load card: ${err?.message || err}`;
         }
+      }).catch((err: any) => {
+        if (this.activeSeq === seq) {
+          contentBody.textContent = `Failed to load card helpers: ${err?.message || err}`;
+        }
       });
     } else if (template && this.hass?.connection) {
       const haMd = document.createElement("ha-markdown");

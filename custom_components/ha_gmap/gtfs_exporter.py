@@ -113,10 +113,9 @@ def _atomic_write_text(path: Path, text: str, also_gzip: bool = True) -> None:
         os.replace(gz_tmp, gz_path)
 
 
-def _read_csv_from_zip(zf: zipfile.ZipFile, filename: str) -> list[dict[str, str]]:
-    """Read a CSV table from a GTFS zip archive safely."""
+def _iter_csv_from_zip(zf: zipfile.ZipFile, filename: str):
+    """Yield CSV rows from a GTFS zip archive without materializing the full table."""
     names = {n.lower(): n for n in zf.namelist()}
-    # Support nested folder inside zip if present
     target = names.get(filename.lower())
     if not target:
         for low, orig in names.items():
@@ -124,14 +123,18 @@ def _read_csv_from_zip(zf: zipfile.ZipFile, filename: str) -> list[dict[str, str
                 target = orig
                 break
     if not target:
-        return []
+        return
     try:
         with zf.open(target) as raw_f:
             text_stream = io.TextIOWrapper(raw_f, encoding="utf-8-sig", errors="replace")
-            return list(csv.DictReader(text_stream))
+            yield from csv.DictReader(text_stream)
     except Exception as err:
         _LOGGER.warning("Failed reading %s from GTFS zip: %s", filename, err)
-        return []
+
+
+def _read_csv_from_zip(zf: zipfile.ZipFile, filename: str) -> list[dict[str, str]]:
+    """Read a CSV table from a GTFS zip archive safely."""
+    return list(_iter_csv_from_zip(zf, filename))
 
 
 def _read_sqlite_table(conn: sqlite3.Connection, table: str, columns: str = "*") -> list[dict[str, Any]]:
@@ -143,29 +146,30 @@ def _read_sqlite_table(conn: sqlite3.Connection, table: str, columns: str = "*")
         return []
 
 
+def _open_sqlite_ro(p: Path) -> sqlite3.Connection:
+    try:
+        return sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return sqlite3.connect(str(p))
+
+
 def _load_gtfs_tables(source_path: str, warnings: list[str]) -> dict[str, list[dict[str, Any]]] | None:
     p = Path(source_path)
     if not p.exists() or not p.is_file():
         warnings.append(f"GTFS source does not exist: {source_path}")
         return None
 
-    if p.suffix.lower() == ".sqlite" or p.suffix.lower() == ".db":
+    if p.suffix.lower() in (".sqlite", ".db"):
         try:
-            conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
-        except sqlite3.Error:
-            try:
-                conn = sqlite3.connect(str(p))
-            except sqlite3.Error as err:
-                warnings.append(f"Could not open SQLite GTFS database: {err}")
-                return None
+            conn = _open_sqlite_ro(p)
+        except sqlite3.Error as err:
+            warnings.append(f"Could not open SQLite GTFS database: {err}")
+            return None
         try:
             return {
                 "routes": _read_sqlite_table(conn, "routes"),
                 "stops": _read_sqlite_table(conn, "stops"),
                 "trips": _read_sqlite_table(conn, "trips"),
-                "stop_times": _read_sqlite_table(
-                    conn, "stop_times", "trip_id, arrival_time, departure_time, stop_id, stop_sequence"
-                ),
                 "shapes": _read_sqlite_table(conn, "shapes"),
                 "calendar": _read_sqlite_table(conn, "calendar"),
                 "calendar_dates": _read_sqlite_table(conn, "calendar_dates"),
@@ -179,7 +183,6 @@ def _load_gtfs_tables(source_path: str, warnings: list[str]) -> dict[str, list[d
                 "routes": _read_csv_from_zip(zf, "routes.txt"),
                 "stops": _read_csv_from_zip(zf, "stops.txt"),
                 "trips": _read_csv_from_zip(zf, "trips.txt"),
-                "stop_times": _read_csv_from_zip(zf, "stop_times.txt"),
                 "shapes": _read_csv_from_zip(zf, "shapes.txt"),
                 "calendar": _read_csv_from_zip(zf, "calendar.txt"),
                 "calendar_dates": _read_csv_from_zip(zf, "calendar_dates.txt"),
@@ -192,18 +195,68 @@ def _load_gtfs_tables(source_path: str, warnings: list[str]) -> dict[str, list[d
         return None
 
 
+def _stream_stop_times(
+    source_path: str,
+    selected_trips: dict[str, dict[str, Any]],
+    stops_by_id: dict[str, dict[str, Any]],
+) -> dict[str, list[tuple[int, int, str]]]:
+    """Stream stop_times row-by-row, retaining only rows belonging to selected_trips."""
+    stop_times_by_trip: dict[str, list[tuple[int, int, str]]] = {}
+    p = Path(source_path)
+
+    def _ingest_row(tid: Any, arr: Any, dep: Any, sid: Any, seq_raw: Any) -> None:
+        tid_s = str(tid or "").strip()
+        if tid_s not in selected_trips:
+            return
+        sid_s = str(sid or "").strip()
+        if sid_s not in stops_by_id:
+            return
+        t_sec = parse_gtfs_time_seconds(dep or arr)
+        if t_sec is None:
+            return
+        try:
+            seq = int(seq_raw or 0)
+        except ValueError:
+            seq = 0
+        stop_times_by_trip.setdefault(tid_s, []).append((seq, t_sec, sid_s))
+
+    if p.suffix.lower() in (".sqlite", ".db"):
+        conn = _open_sqlite_ro(p)
+        try:
+            cur = conn.execute("SELECT trip_id, arrival_time, departure_time, stop_id, stop_sequence FROM stop_times")
+            for tid, arr, dep, sid, seq_raw in cur:
+                _ingest_row(tid, arr, dep, sid, seq_raw)
+        except sqlite3.Error:
+            pass
+        finally:
+            conn.close()
+        return stop_times_by_trip
+
+    with zipfile.ZipFile(p, "r") as zf:
+        for st in _iter_csv_from_zip(zf, "stop_times.txt"):
+            _ingest_row(
+                st.get("trip_id"),
+                st.get("arrival_time"),
+                st.get("departure_time"),
+                st.get("stop_id"),
+                st.get("stop_sequence"),
+            )
+    return stop_times_by_trip
+
+
 def discover_routes_from_source(source_path: str) -> list[dict[str, str]]:
     """Return lightweight route summaries [{id, label, route_type}] from a GTFS zip or sqlite."""
-    warnings: list[str] = []
     p = Path(source_path)
     if not p.exists():
         return []
     rows: list[dict[str, Any]] = []
     if p.suffix.lower() in (".sqlite", ".db"):
         try:
-            conn = sqlite3.connect(str(p))
-            rows = _read_sqlite_table(conn, "routes", "route_id, route_short_name, route_long_name, route_type")
-            conn.close()
+            conn = _open_sqlite_ro(p)
+            try:
+                rows = _read_sqlite_table(conn, "routes", "route_id, route_short_name, route_long_name, route_type")
+            finally:
+                conn.close()
         except Exception:
             return []
     else:
@@ -288,11 +341,13 @@ def export_gtfs(
     if tables is None:
         return result
 
-    allowed_types = {str(t).strip() for t in (route_types or ["0", "1", "2", "4"]) if str(t).strip()}
+    effective_types = ["0", "1", "2", "4"] if route_types is None else route_types
+    allowed_types = {str(t).strip() for t in effective_types if str(t).strip()}
     allowed_routes = {str(r).strip().lower() for r in (route_filter or []) if str(r).strip()}
 
     # 1. Index routes matching filter
     selected_routes: dict[str, dict[str, Any]] = {}
+    used_line_keys: set[str] = set()
     for r in tables["routes"]:
         rid = str(r.get("route_id") or "").strip()
         if not rid:
@@ -301,7 +356,11 @@ def export_gtfs(
         short_n = str(r.get("route_short_name") or "").strip()
         long_n = str(r.get("route_long_name") or "").strip()
         if allowed_types and rtype_raw not in allowed_types:
-            if not allowed_routes or (rid.lower() not in allowed_routes and short_n.lower() not in allowed_routes):
+            if not allowed_routes or (
+                rid.lower() not in allowed_routes
+                and short_n.lower() not in allowed_routes
+                and long_n.lower() not in allowed_routes
+            ):
                 continue
         if allowed_routes:
             if (
@@ -315,6 +374,10 @@ def export_gtfs(
         except ValueError:
             rtype_int = 3
         line_key = slugify_route_key(rid, short_n, long_n)
+        if line_key in used_line_keys:
+            rid_slug = re.sub(r"[^a-z0-9]+", "_", rid.lower()).strip("_") or "dup"
+            line_key = f"{line_key}_{rid_slug}"
+        used_line_keys.add(line_key)
         selected_routes[rid] = {
             "route_id": rid,
             "line_key": line_key,
@@ -383,23 +446,8 @@ def export_gtfs(
         result.warnings.append("Selected routes had 0 trips in trips.txt.")
         return result
 
-    # 5. Group stop_times by trip_id
-    stop_times_by_trip: dict[str, list[tuple[int, int, str]]] = {}
-    for st in tables["stop_times"]:
-        tid = str(st.get("trip_id") or "").strip()
-        if tid not in selected_trips:
-            continue
-        sid = str(st.get("stop_id") or "").strip()
-        if sid not in stops_by_id:
-            continue
-        t_sec = parse_gtfs_time_seconds(st.get("departure_time") or st.get("arrival_time"))
-        if t_sec is None:
-            continue
-        try:
-            seq = int(st.get("stop_sequence") or 0)
-        except ValueError:
-            seq = 0
-        stop_times_by_trip.setdefault(tid, []).append((seq, t_sec, sid))
+    # 5. Stream stop_times row-by-row and keep only selected trips
+    stop_times_by_trip = _stream_stop_times(source_path, selected_trips, stops_by_id)
 
     # 6. Build deduplicated profiles & trips map + route geometry
     profiles: list[dict[str, Any]] = []

@@ -7,7 +7,8 @@ import {
   extractRouteKeys,
   findActiveScheduledTrips,
   findUpcomingArrivalsForStation,
-  interpolateTripPosition
+  interpolateTripPosition,
+  resolveServiceDaySeconds
 } from "../src/transit/schedule";
 
 const fakeGoogleMaps = {
@@ -192,5 +193,12 @@ describe("Malformed GTFS Schedule & GeoJSON Resilience", () => {
     expect(decodeURIComponent(triSvg)).toContain("<polygon points='12,2 21,21 12,17 3,21'");
 
     expect(extractRouteKeys("/local/gtfs2/metro_yamanote.geojson")).toContain("yamanote");
+  });
+
+  it("respects fractional rolloverHour precisely (03:45 AM is not rolled into yesterday for 3.5)", () => {
+    const at315 = new Date(2026, 10, 24, 3, 15, 0);
+    const at345 = new Date(2026, 10, 24, 3, 45, 0);
+    expect(resolveServiceDaySeconds(at315, { rolloverHour: 3.5 })).toBeGreaterThan(86400);
+    expect(resolveServiceDaySeconds(at345, { rolloverHour: 3.5 }) < 86400).toBe(true);
   });
 });

@@ -139,11 +139,17 @@ export function resolveCustomSvgBadgeDataUrl(
   const fetchPromise = fetch(svgUrl)
     .then((r) => (r.ok ? r.text() : null))
     .then((svgText) => {
-      if (!svgText) return null;
+      if (!svgText) {
+        rawSvgCache.delete(svgUrl);
+        return null;
+      }
       rawSvgCache.set(svgUrl, svgText);
       return svgText;
     })
-    .catch(() => null);
+    .catch(() => {
+      rawSvgCache.delete(svgUrl);
+      return null;
+    });
 
   rawSvgCache.set(svgUrl, fetchPromise);
   if (onReady) {
@@ -190,7 +196,10 @@ export function resolveMdiIconDataUrl(
   const fetchPromise = fetch(`${MDI_SVG_CDN}${encodeURIComponent(mdiName)}.svg`)
     .then((r) => (r.ok ? r.text() : null))
     .then((svgText) => {
-      if (!svgText) return null;
+      if (!svgText) {
+        mdiIconCache.delete(cacheKey);
+        return null;
+      }
       const innerMatch = svgText.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i);
       const inner = innerMatch ? innerMatch[1].replace(/fill="[^"]*"/g, "") : "";
       const dataUrl = badge
@@ -211,7 +220,10 @@ export function resolveMdiIconDataUrl(
       mdiIconCache.set(cacheKey, dataUrl);
       return dataUrl;
     })
-    .catch(() => null);
+    .catch(() => {
+      mdiIconCache.delete(cacheKey);
+      return null;
+    });
 
   mdiIconCache.set(cacheKey, fetchPromise);
   if (onReady) {
@@ -411,6 +423,7 @@ export class TransitMotionEngine {
   private loadedUrl: string | null = null;
   private ingestTimer: any = null;
   private animTimer: any = null;
+  private zoomListener: any = null;
   private filterActive = true;
   private isCulled = false;
   private lastZoom: number | null = null;
@@ -537,7 +550,11 @@ export class TransitMotionEngine {
       if (!p) {
         p = fetch(url)
           .then((r) => (r.ok ? (r.json() as Promise<TransitSchedule>) : null))
-          .catch(() => null);
+          .catch(() => null)
+          .then((res) => {
+            if (!res) scheduleCache.delete(url);
+            return res;
+          });
         scheduleCache.set(url, p);
       }
       const data = await p;
@@ -552,7 +569,7 @@ export class TransitMotionEngine {
 
   private setupListeners() {
     if (this.map && typeof this.map.addListener === "function") {
-      this.map.addListener("zoom_changed", () => this.checkZoom());
+      this.zoomListener = this.map.addListener("zoom_changed", () => this.checkZoom());
     }
   }
 
@@ -674,6 +691,7 @@ export class TransitMotionEngine {
           (shape === "triangle" || shape === "arrow" || routeCfg?.directional || this.motionConfig.vehicleDirectional);
 
         let newMarker: any = null;
+        let domImgEl: HTMLImageElement | null = null;
         const iconObj = getTransitVehicleIcon(
           this.googleMaps,
           trip.lineKey,
@@ -682,6 +700,8 @@ export class TransitMotionEngine {
           (asyncIcon) => {
             if (newMarker && typeof newMarker.setIcon === "function") {
               newMarker.setIcon(asyncIcon);
+            } else if (domImgEl && asyncIcon?.url) {
+              domImgEl.src = asyncIcon.url;
             }
           },
           this.schedule
@@ -695,11 +715,25 @@ export class TransitMotionEngine {
           const wrapper = document.createElement("div");
           wrapper.style.cssText = `width:${sz}px;height:${sz}px;display:flex;align-items:center;justify-content:center;transition:transform 150ms linear;will-change:transform;`;
           if (shape === "triangle" || shape === "arrow") {
-            wrapper.innerHTML = `<svg viewBox="0 0 24 24" width="${sz}" height="${sz}" style="display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.45));"><polygon points="12,2 21,21 12,17 3,21" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/></svg>`;
+            const svgNS = "http://www.w3.org/2000/svg";
+            const svg = document.createElementNS(svgNS, "svg");
+            svg.setAttribute("viewBox", "0 0 24 24");
+            svg.setAttribute("width", String(sz));
+            svg.setAttribute("height", String(sz));
+            svg.style.cssText = "display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.45));";
+            const poly = document.createElementNS(svgNS, "polygon");
+            poly.setAttribute("points", "12,2 21,21 12,17 3,21");
+            poly.setAttribute("fill", String(fill));
+            poly.setAttribute("stroke", String(stroke));
+            poly.setAttribute("stroke-width", String(sw));
+            poly.setAttribute("stroke-linejoin", "round");
+            svg.appendChild(poly);
+            wrapper.appendChild(svg);
           } else if (iconObj?.url) {
             const img = document.createElement("img");
             img.src = iconObj.url;
             img.style.cssText = `width:${sz}px;height:${sz}px;object-fit:contain;display:block;`;
+            domImgEl = img;
             wrapper.appendChild(img);
           }
           newMarker = new this.googleMaps.marker.AdvancedMarkerElement({
@@ -848,6 +882,8 @@ export class TransitMotionEngine {
 
   public destroy() {
     this.destroyed = true;
+    this.zoomListener?.remove?.();
+    this.zoomListener = null;
     if (this.ingestTimer) {
       clearInterval(this.ingestTimer);
       this.ingestTimer = null;

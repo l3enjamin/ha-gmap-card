@@ -71,7 +71,7 @@ export function resolveServiceDaySeconds(
   const millis = date.getMilliseconds();
 
   let sec = hours * 3600 + minutes * 60 + seconds + millis / 1000;
-  if (hours < rollover) {
+  if (sec < rollover * 3600) {
     sec += 24 * 3600;
   }
   return sec;
@@ -197,8 +197,8 @@ export function findActiveScheduledTrips(
   }
 
   const rollover = options?.rolloverHour ?? 3.5;
-  const hours = date.getHours();
-  const isPostMidnight = hours < rollover;
+  const fractionalHours = date.getHours() + date.getMinutes() / 60;
+  const isPostMidnight = fractionalHours < rollover;
   const serviceDay = isPostMidnight ? (date.getDay() + 6) % 7 : date.getDay();
   const secNow = resolveServiceDaySeconds(date, { rolloverHour: rollover });
 
@@ -447,7 +447,7 @@ export function findUpcomingArrivalsForStation(
   const limit = options?.limit ?? 6;
   const rollover = options?.rolloverHour ?? 3.5;
 
-  const isPostMidnight = date.getHours() < rollover;
+  const isPostMidnight = date.getHours() + date.getMinutes() / 60 < rollover;
   const serviceDay = isPostMidnight ? (date.getDay() + 6) % 7 : date.getDay();
   const secNow = resolveServiceDaySeconds(date, { rolloverHour: rollover });
 

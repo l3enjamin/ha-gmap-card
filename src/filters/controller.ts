@@ -3,6 +3,7 @@ import { FilterGroupConfig, LayerFiltersConfig } from "../config/schema";
 export class FilterController {
   private filterStates = new Map<string, boolean>();
   private onStateChangeCallbacks: Array<(filterId: string, active: boolean) => void> = [];
+  private cleanupFns: Array<() => void> = [];
 
   constructor(
     private layerConfig: LayerFiltersConfig,
@@ -188,8 +189,20 @@ export class FilterController {
       else openDropdown();
     });
 
+    this.cleanupFns.push(closeDropdown);
+
     container.appendChild(btn);
     container.appendChild(dropdown);
     return container;
+  }
+
+  public destroy() {
+    for (const fn of this.cleanupFns) {
+      try {
+        fn();
+      } catch (_) {}
+    }
+    this.cleanupFns = [];
+    this.onStateChangeCallbacks = [];
   }
 }

@@ -333,13 +333,17 @@ export class BatchedDomMarkerLayer {
         if (entry.attached === shouldAttach) return;
         entry.attached = shouldAttach;
         if (shouldAttach) {
+          layer.entries.add(entry);
           if (layer.rootEl && !entry.wrapper.parentElement) {
             layer.rootEl.appendChild(entry.wrapper);
           }
           const proj = layer.overlay?.getProjection?.();
           if (proj) layer.drawEntry(entry, proj);
-        } else if (entry.wrapper.parentElement) {
-          entry.wrapper.parentElement.removeChild(entry.wrapper);
+        } else {
+          layer.entries.delete(entry);
+          if (entry.wrapper.parentElement) {
+            entry.wrapper.parentElement.removeChild(entry.wrapper);
+          }
         }
       },
       getMap() {

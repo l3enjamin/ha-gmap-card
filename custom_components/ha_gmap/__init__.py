@@ -86,7 +86,10 @@ class GtfsExporterCoordinator(DataUpdateCoordinator[GtfsExportResult | None]):
         if not source:
             return None
 
-        output_dir = Path(self.hass.config.path("www", output_slug))
+        www_root = Path(self.hass.config.path("www")).resolve()
+        output_dir = (www_root / output_slug).resolve()
+        if not output_dir.is_relative_to(www_root):
+            raise UpdateFailed(f"Invalid output_dir outside www/: {output_slug}")
         url_prefix = f"/local/{output_slug}"
 
         # Remote HTTP/HTTPS zip download
@@ -103,7 +106,7 @@ class GtfsExporterCoordinator(DataUpdateCoordinator[GtfsExportResult | None]):
                     if resp.status >= 400:
                         raise UpdateFailed(f"HTTP {resp.status} downloading GTFS feed")
                     data = await resp.read()
-                    self._last_etag = resp.headers.get("ETag")
+                    new_etag = resp.headers.get("ETag")
             except aiohttp.ClientError as err:
                 raise UpdateFailed(f"Error downloading GTFS feed: {err}") from err
 
@@ -112,18 +115,25 @@ class GtfsExporterCoordinator(DataUpdateCoordinator[GtfsExportResult | None]):
                 cache_zip.write_bytes(data)
                 return export_gtfs(str(cache_zip), str(output_dir), route_types, route_filter, url_prefix)
 
+            res = await self.hass.async_add_executor_job(_write_and_export)
+            self._last_etag = new_etag
             self.force_next = False
-            return await self.hass.async_add_executor_job(_write_and_export)
+            return res
 
         # Local .zip or .sqlite file
         local_path = Path(source)
         if not local_path.is_absolute():
             local_path = Path(self.hass.config.path(source))
-        if not local_path.exists():
-            raise UpdateFailed(f"GTFS file not found: {local_path}")
 
-        cur_mtime = os.path.getmtime(local_path)
-        if not self.force_next and self._last_mtime == cur_mtime and (output_dir / "transit_schedule.json").exists():
+        def _stat_local() -> tuple[bool, float | None, bool]:
+            if not local_path.exists():
+                return (False, None, False)
+            return (True, os.path.getmtime(local_path), (output_dir / "transit_schedule.json").exists())
+
+        exists, cur_mtime, has_schedule = await self.hass.async_add_executor_job(_stat_local)
+        if not exists:
+            raise UpdateFailed(f"GTFS file not found: {local_path}")
+        if not self.force_next and self._last_mtime == cur_mtime and has_schedule:
             return self.data
 
         res = await self.hass.async_add_executor_job(
@@ -146,6 +156,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     coord: GtfsExporterCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coord:
+        cfg = {**entry.data, **entry.options}
+        hours = max(1, int(cfg.get(CONF_SCAN_INTERVAL_HOURS, DEFAULT_SCAN_INTERVAL_HOURS)))
+        coord.update_interval = timedelta(hours=hours)
         coord.force_next = True
         await coord.async_request_refresh()
 
