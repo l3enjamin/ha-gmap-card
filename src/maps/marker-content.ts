@@ -19,6 +19,9 @@ export function resolveEntityPicture(entityConfig: CardEntityConfig, stateObj: a
     const val = resolveDotPath(attrs, entityConfig.pictureAttribute);
     if (typeof val === "string" && val.trim()) return val.trim();
   }
+  // Explicit `icon` takes precedence over state `entity_picture` (e.g. camera feeds or entity avatars)
+  if (entityConfig.icon) return undefined;
+  if (entityConfig.entityId?.startsWith("camera.")) return undefined;
   if (typeof attrs?.entity_picture === "string" && attrs.entity_picture.trim()) {
     return attrs.entity_picture.trim();
   }

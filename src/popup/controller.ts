@@ -231,6 +231,16 @@ export class PopupController {
       const unit = stateObj?.attributes?.unit_of_measurement ? ` ${stateObj.attributes.unit_of_measurement}` : "";
       stateDiv.textContent = `State: ${stateObj?.state ?? "unknown"}${unit}`;
       contentBody.appendChild(stateDiv);
+
+      const camPic = stateObj?.attributes?.entity_picture;
+      if (entityConfig.entityId.startsWith("camera.") && typeof camPic === "string" && camPic.trim()) {
+        const img = document.createElement("img");
+        img.src = camPic.trim();
+        img.alt = entityConfig.name || stateObj?.attributes?.friendly_name || entityConfig.entityId;
+        img.style.cssText =
+          "display:block;width:100%;max-width:360px;max-height:260px;object-fit:contain;border-radius:8px;margin-top:8px;";
+        contentBody.appendChild(img);
+      }
     }
 
     infoWindow.setContent(container);

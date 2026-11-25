@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { normalizeCardConfig } from "../src/config/schema";
+import { resolveEntityPicture } from "../src/maps/marker-content";
 import { buildTriangleSvgDataUrl, getTransitVehicleIcon } from "../src/transit/motion";
 import {
   advanceAlongPolylines,
@@ -200,5 +201,13 @@ describe("Malformed GTFS Schedule & GeoJSON Resilience", () => {
     const at345 = new Date(2026, 10, 24, 3, 45, 0);
     expect(resolveServiceDaySeconds(at315, { rolloverHour: 3.5 })).toBeGreaterThan(86400);
     expect(resolveServiceDaySeconds(at345, { rolloverHour: 3.5 }) < 86400).toBe(true);
+  });
+
+  it("prefers explicit icon and suppresses camera feed entity_picture on map markers", () => {
+    const camState = { attributes: { entity_picture: "/api/camera_proxy/camera.drivebc_123" } };
+    expect(resolveEntityPicture({ entityId: "camera.drivebc_123", icon: "mdi:cctv" }, camState)).toBe(undefined);
+    expect(resolveEntityPicture({ entityId: "camera.drivebc_123" }, camState)).toBe(undefined);
+    expect(resolveEntityPicture({ entityId: "camera.drivebc_123", picture: "/local/cctv.svg" }, camState)).toBe("/local/cctv.svg");
+    expect(resolveEntityPicture({ entityId: "sensor.chevron_gas" }, { attributes: { entity_picture: "/local/chevron.png" } })).toBe("/local/chevron.png");
   });
 });
