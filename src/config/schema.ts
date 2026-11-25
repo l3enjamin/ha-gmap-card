@@ -1,5 +1,6 @@
-export type MarkerShapeType = "circle" | "icon" | "picture" | "rectangle" | "square" | "auto";
+export type MarkerShapeType = "circle" | "icon" | "picture" | "rectangle" | "square" | "triangle" | "arrow" | "auto";
 export type PictureShapeType = "circle" | "rectangle" | "auto";
+export type RouteLabelShapeType = "pill" | "rectangle" | "square" | "circle";
 
 export interface CardEntityConfig {
   entityId: string;
@@ -54,6 +55,17 @@ export interface GeoJsonLayerConfig {
   fillOpacity?: number;
   showPopup?: boolean;
   filterGroup?: string;
+  showLabels?: boolean;
+  labelSpacing?: number;
+  labelSize?: number;
+  labelColor?: string;
+  labelTextColor?: string;
+  labelShape?: RouteLabelShapeType;
+  labelBorderColor?: string;
+  labelBorderWidth?: number;
+  labelBorderRadius?: number;
+  labelPadding?: number;
+  labelMinZoom?: number;
 }
 
 export interface FilterGroupConfig {
@@ -77,6 +89,7 @@ export interface TransitRouteConfig {
   borderWidth?: number;
   borderRadius?: number;
   padding?: number;
+  directional?: boolean;
   enabled?: boolean;
 }
 
@@ -95,6 +108,7 @@ export interface TransitMotionConfig {
   vehicleBorderWidth?: number;
   vehicleBorderRadius?: number;
   vehiclePadding?: number;
+  vehicleDirectional?: boolean;
   vehicles: Record<string, string>;
   routes: Record<string, TransitRouteConfig>;
 }
@@ -139,26 +153,74 @@ export interface NormalizedCardConfig {
   raw: any;
 }
 
-function parseOptionalNumber(val: any): number | null {
-  if (val === undefined || val === null || val === "") return null;
+function parseOptionalNumber(val: unknown): number | null {
+  if (val === undefined || val === null || val === "" || typeof val === "boolean" || typeof val === "object") {
+    return null;
+  }
   const n = Number(val);
   return Number.isFinite(n) ? n : null;
 }
 
-export function normalizeCardConfig(raw: any): NormalizedCardConfig {
-  const cfg = raw || {};
+function asFiniteNumber(
+  val: unknown,
+  fallback: number | undefined,
+  min?: number,
+  max?: number
+): number | undefined {
+  const n = parseOptionalNumber(val);
+  if (n === null) return fallback;
+  let clamped = n;
+  if (min !== undefined && clamped < min) clamped = min;
+  if (max !== undefined && clamped > max) clamped = max;
+  return clamped;
+}
 
-  const apiKey = cfg.api_key || cfg.apiKey || "";
-  const mapId = cfg.map_id || cfg.mapId || undefined;
-  const center = cfg.center || cfg.initial_center || cfg.center_entity || undefined;
-  const zoom = Number(cfg.zoom ?? 15);
+function asString(val: unknown, fallback?: string): string | undefined {
+  if (val === undefined || val === null) return fallback;
+  if (typeof val === "string") return val;
+  if (typeof val === "number" || typeof val === "boolean") {
+    return String(val);
+  }
+  return fallback;
+}
+
+function asRecord(val: unknown): Record<string, any> {
+  if (val && typeof val === "object" && !Array.isArray(val)) {
+    return val as Record<string, any>;
+  }
+  return {};
+}
+
+export function normalizeCardConfig(raw: any): NormalizedCardConfig {
+  if (raw !== undefined && raw !== null && (typeof raw !== "object" || Array.isArray(raw))) {
+    console.warn("[ha-gmap-card] Expected card configuration object, received:", typeof raw);
+  }
+  const cfg = asRecord(raw);
+
+  const apiKey = asString(cfg.api_key ?? cfg.apiKey, "") || "";
+  const mapId = asString(cfg.map_id ?? cfg.mapId);
+  const rawCenter = cfg.center ?? cfg.initial_center ?? cfg.center_entity;
+  const center =
+    typeof rawCenter === "string"
+      ? rawCenter
+      : rawCenter && typeof rawCenter === "object" && !Array.isArray(rawCenter)
+        ? {
+            lat: asFiniteNumber((rawCenter as any).lat, 0, -90, 90) ?? 0,
+            lng: asFiniteNumber((rawCenter as any).lng, 0, -180, 180) ?? 0
+          }
+        : undefined;
+  const zoom = asFiniteNumber(cfg.zoom, 15, 0, 24) ?? 15;
   const followByDefault = Boolean(cfg.follow_by_default ?? cfg.followByDefault ?? false);
   const fitEntities = Boolean(cfg.fit_entities ?? cfg.fitEntities ?? false);
-  const zones = (cfg.zones && typeof cfg.zones === "object" && !Array.isArray(cfg.zones)) ? cfg.zones : {};
-  const mapType = cfg.map_type || cfg.mapType || "roadmap";
-  const gestureHandling = cfg.gesture_handling || cfg.gestureHandling || "greedy";
-  const colorScheme = cfg.color_scheme || cfg.colorScheme || "follow_system";
-  const language = cfg.language || undefined;
+  const zones = asRecord(cfg.zones);
+  const mapType = asString(cfg.map_type ?? cfg.mapType, "roadmap") || "roadmap";
+  const gestureHandling = asString(cfg.gesture_handling ?? cfg.gestureHandling, "greedy") || "greedy";
+  const rawColorScheme = asString(cfg.color_scheme ?? cfg.colorScheme, "follow_system");
+  const colorScheme =
+    rawColorScheme === "light" || rawColorScheme === "dark" || rawColorScheme === "follow_system"
+      ? rawColorScheme
+      : "follow_system";
+  const language = asString(cfg.language);
   const showTraffic = Boolean(cfg.show_traffic ?? cfg.showTraffic ?? false);
   const showTrafficButton = Boolean(cfg.show_traffic_button ?? cfg.showTrafficButton ?? false);
   const showTrafficButtonPosition = cfg.show_traffic_button_position || cfg.showTrafficButtonPosition || "TOP_RIGHT";
@@ -222,73 +284,90 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
     }
   }
 
+  const rlDefaults = asRecord(cfg.route_labels ?? cfg.routeLabels);
   const geoRaw = cfg.geojson_layers || cfg.geojsonLayers || [];
-  const geojsonLayers: GeoJsonLayerConfig[] = (Array.isArray(geoRaw) ? geoRaw : []).map((l: any) => {
-    const rawPointSize = l.point_size ?? l.pointSize ?? l.icon_size ?? l.iconSize ?? l.size;
-    const rawBorderWidth = l.border_width ?? l.borderWidth;
-    return {
-      url: l.url || "",
-      name: l.name || l.label,
-      label: l.label || l.name,
-      routeKey: l.route_key || l.routeKey || l.route_id,
-      icon: l.icon,
-      image: l.image || l.picture,
-      pointShape: l.point_shape || l.pointShape || l.marker_type || l.markerType || l.shape,
-      pointSize: rawPointSize !== undefined ? Number(rawPointSize) : undefined,
-      pointColor: l.point_color || l.pointColor || l.background_color || l.backgroundColor,
-      borderColor: l.border_color || l.borderColor,
-      borderWidth: rawBorderWidth !== undefined ? Number(rawBorderWidth) : undefined,
-      borderRadius: parseOptionalNumber(l.border_radius ?? l.borderRadius ?? l.picture_border_radius ?? l.pictureBorderRadius) ?? undefined,
-      padding: parseOptionalNumber(l.padding ?? l.picture_padding ?? l.picturePadding) ?? undefined,
-      stationIcon: l.station_icon || l.stationIcon,
-      stopIcon: l.stop_icon || l.stopIcon,
-      stationSize: Number(l.station_size ?? l.station_icon_size ?? rawPointSize ?? 18),
-      stopSize: Number(l.stop_size ?? l.stop_icon_size ?? rawPointSize ?? 14),
-      strokeColor: l.stroke_color || l.strokeColor || l.color || "#007aff",
-      strokeWidth: Number(l.stroke_width ?? l.strokeWidth ?? l.width ?? 3),
-      fillColor: l.fill_color || l.fillColor,
-      fillOpacity: l.fill_opacity ?? l.fillOpacity,
-      showPopup: l.show_popup ?? l.showPopup ?? true,
-      filterGroup: l.filter_group || l.filterGroup || l.group || "routes"
-    };
-  });
+  const geojsonLayers: GeoJsonLayerConfig[] = (Array.isArray(geoRaw) ? geoRaw : [])
+    .filter((l: any) => l && typeof l === "object" && !Array.isArray(l))
+    .map((l: any) => {
+      const rawPointSize = l.point_size ?? l.pointSize ?? l.icon_size ?? l.iconSize ?? l.size;
+      const pointSize = asFiniteNumber(rawPointSize, undefined, 1, 512);
+      return {
+        url: asString(l.url, "") || "",
+        name: asString(l.name ?? l.label),
+        label: asString(l.label ?? l.name),
+        routeKey: asString(l.route_key ?? l.routeKey ?? l.route_id),
+        icon: asString(l.icon),
+        image: asString(l.image ?? l.picture),
+        pointShape: asString(l.point_shape ?? l.pointShape ?? l.marker_type ?? l.markerType ?? l.shape) as any,
+        pointSize,
+        pointColor: asString(l.point_color ?? l.pointColor ?? l.background_color ?? l.backgroundColor),
+        borderColor: asString(l.border_color ?? l.borderColor),
+        borderWidth: asFiniteNumber(l.border_width ?? l.borderWidth, undefined, 0, 64),
+        borderRadius: asFiniteNumber(l.border_radius ?? l.borderRadius ?? l.picture_border_radius ?? l.pictureBorderRadius, undefined, 0, 256),
+        padding: asFiniteNumber(l.padding ?? l.picture_padding ?? l.picturePadding, undefined, 0, 128),
+        stationIcon: asString(l.station_icon ?? l.stationIcon),
+        stopIcon: asString(l.stop_icon ?? l.stopIcon),
+        stationSize: asFiniteNumber(l.station_size ?? l.station_icon_size ?? rawPointSize, 18, 1, 512) ?? 18,
+        stopSize: asFiniteNumber(l.stop_size ?? l.stop_icon_size ?? rawPointSize, 14, 1, 512) ?? 14,
+        strokeColor: asString(l.stroke_color ?? l.strokeColor ?? l.color, "#007aff") || "#007aff",
+        strokeWidth: asFiniteNumber(l.stroke_width ?? l.strokeWidth ?? l.width, 3, 0, 64) ?? 3,
+        fillColor: asString(l.fill_color ?? l.fillColor),
+        fillOpacity: asFiniteNumber(l.fill_opacity ?? l.fillOpacity, undefined, 0, 1),
+        showPopup: l.show_popup ?? l.showPopup ?? true,
+        filterGroup: asString(l.filter_group ?? l.filterGroup ?? l.group, "routes") || "routes",
+        showLabels: l.show_labels ?? l.showLabels ?? rlDefaults.enabled ?? true,
+        labelSpacing: asFiniteNumber(l.label_spacing ?? l.labelSpacing ?? rlDefaults.spacing, undefined, 50, 100000),
+        labelSize: asFiniteNumber(l.label_size ?? l.labelSize ?? rlDefaults.size, undefined, 10, 120),
+        labelColor: asString(l.label_color ?? l.labelColor ?? l.label_background_color ?? rlDefaults.color ?? rlDefaults.background_color),
+        labelTextColor: asString(l.label_text_color ?? l.labelTextColor ?? rlDefaults.text_color),
+        labelShape: asString(l.label_shape ?? l.labelShape ?? rlDefaults.shape) as RouteLabelShapeType | undefined,
+        labelBorderColor: asString(l.label_border_color ?? l.labelBorderColor ?? rlDefaults.border_color),
+        labelBorderWidth: asFiniteNumber(l.label_border_width ?? l.labelBorderWidth ?? rlDefaults.border_width, undefined, 0, 32),
+        labelBorderRadius: asFiniteNumber(l.label_border_radius ?? l.labelBorderRadius ?? rlDefaults.border_radius, undefined, 0, 128),
+        labelPadding: asFiniteNumber(l.label_padding ?? l.labelPadding ?? rlDefaults.padding, undefined, 0, 64),
+        labelMinZoom: asFiniteNumber(l.label_min_zoom ?? l.labelMinZoom ?? rlDefaults.min_zoom, undefined, 0, 24)
+      };
+    });
 
-  const tmRaw = cfg.transit_motion ?? cfg.transitMotion ?? {};
-  const rawBusMatch = tmRaw?.bus_match ?? tmRaw?.busMatch ?? tmRaw?.vehicle_entities;
+  const tmRaw = cfg.transit_motion === false ? false : asRecord(cfg.transit_motion ?? cfg.transitMotion);
+  const tmObj = tmRaw === false ? {} : tmRaw;
+  const rawBusMatch = tmObj.bus_match ?? tmObj.busMatch ?? tmObj.vehicle_entities;
   const busMatch = Array.isArray(rawBusMatch)
-    ? rawBusMatch.map(String)
+    ? rawBusMatch.map((x) => asString(x)).filter((x): x is string => Boolean(x))
     : typeof rawBusMatch === "string" && rawBusMatch.trim()
       ? [rawBusMatch.trim()]
       : null;
 
-  const rawVehicles = tmRaw?.vehicles || cfg.transit_vehicles || cfg.transit_icons?.vehicles || {};
+  const rawVehicles = tmObj.vehicles || cfg.transit_vehicles || cfg.transit_icons?.vehicles || {};
   const vehicles: Record<string, string> = {};
-  if (rawVehicles && typeof rawVehicles === "object") {
+  if (rawVehicles && typeof rawVehicles === "object" && !Array.isArray(rawVehicles)) {
     for (const [k, v] of Object.entries(rawVehicles)) {
-      if (typeof v === "string") vehicles[k] = v;
+      const sv = asString(v);
+      if (sv) vehicles[k] = sv;
     }
   }
 
-  const rawRoutes = tmRaw?.routes || {};
+  const rawRoutes = tmObj.routes || {};
   const routes: Record<string, TransitRouteConfig> = {};
-  if (rawRoutes && typeof rawRoutes === "object") {
+  if (rawRoutes && typeof rawRoutes === "object" && !Array.isArray(rawRoutes)) {
     for (const [k, v] of Object.entries(rawRoutes)) {
-      if (v && typeof v === "object") {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
         const r = v as any;
         const rawSz = r.icon_size ?? r.iconSize ?? r.size;
         routes[k] = {
-          label: r.label || r.name,
-          name: r.name || r.label,
-          icon: r.icon,
-          image: r.image || r.picture,
-          color: r.color || r.icon_color,
-          iconSize: rawSz !== undefined ? Number(rawSz) : undefined,
-          shape: r.shape || r.marker_type || r.markerType || r.point_shape || r.pointShape,
-          backgroundColor: r.background_color || r.backgroundColor || r.point_color || r.pointColor,
-          borderColor: r.border_color || r.borderColor,
-          borderWidth: parseOptionalNumber(r.border_width ?? r.borderWidth) ?? undefined,
-          borderRadius: parseOptionalNumber(r.border_radius ?? r.borderRadius) ?? undefined,
-          padding: parseOptionalNumber(r.padding) ?? undefined,
+          label: asString(r.label ?? r.name),
+          name: asString(r.name ?? r.label),
+          icon: asString(r.icon),
+          image: asString(r.image ?? r.picture),
+          color: asString(r.color ?? r.icon_color),
+          iconSize: asFiniteNumber(rawSz, undefined, 4, 256),
+          shape: asString(r.shape ?? r.marker_type ?? r.markerType ?? r.point_shape ?? r.pointShape) as any,
+          backgroundColor: asString(r.background_color ?? r.backgroundColor ?? r.point_color ?? r.pointColor),
+          borderColor: asString(r.border_color ?? r.borderColor),
+          borderWidth: asFiniteNumber(r.border_width ?? r.borderWidth, undefined, 0, 32),
+          borderRadius: asFiniteNumber(r.border_radius ?? r.borderRadius, undefined, 0, 128),
+          padding: asFiniteNumber(r.padding, undefined, 0, 64),
+          directional: r.directional !== undefined ? Boolean(r.directional) : undefined,
           enabled: r.enabled !== false
         };
       }
@@ -296,66 +375,69 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
   }
 
   const transitMotion: TransitMotionConfig = {
-    enabled: tmRaw !== false && tmRaw?.enabled !== false,
-    fps: Math.max(5, Math.min(60, Number(tmRaw?.fps || 30))),
-    minZoom: Number(tmRaw?.min_zoom ?? tmRaw?.minZoom ?? cfg.animation_min_zoom ?? 13),
-    busMinZoom: parseOptionalNumber(tmRaw?.bus_min_zoom ?? tmRaw?.busMinZoom ?? cfg.bus_min_zoom),
+    enabled: tmRaw !== false && tmObj.enabled !== false,
+    fps: asFiniteNumber(tmObj.fps, 30, 5, 60) ?? 30,
+    minZoom: asFiniteNumber(tmObj.min_zoom ?? tmObj.minZoom ?? cfg.animation_min_zoom, 13, 0, 24) ?? 13,
+    busMinZoom: asFiniteNumber(tmObj.bus_min_zoom ?? tmObj.busMinZoom ?? cfg.bus_min_zoom, undefined, 0, 24) ?? null,
     busMatch,
-    scheduleUrl: tmRaw?.schedule_url || tmRaw?.scheduleUrl || cfg.transit_schedule || "/local/gtfs2/transit_schedule.json",
-    filterGroup: tmRaw?.filter_group || tmRaw?.filterGroup || tmRaw?.group || "vehicles",
-    simulate247: Boolean(tmRaw?.simulate_24_7 ?? tmRaw?.simulate247 ?? false),
-    vehicleShape: tmRaw?.vehicle_shape || tmRaw?.vehicleShape || tmRaw?.marker_type || tmRaw?.markerType || tmRaw?.shape,
-    vehicleBackgroundColor: tmRaw?.vehicle_background_color || tmRaw?.vehicleBackgroundColor || tmRaw?.background_color || tmRaw?.backgroundColor,
-    vehicleBorderColor: tmRaw?.vehicle_border_color || tmRaw?.vehicleBorderColor || tmRaw?.border_color || tmRaw?.borderColor,
-    vehicleBorderWidth: parseOptionalNumber(tmRaw?.vehicle_border_width ?? tmRaw?.vehicleBorderWidth ?? tmRaw?.border_width ?? tmRaw?.borderWidth) ?? undefined,
-    vehicleBorderRadius: parseOptionalNumber(tmRaw?.vehicle_border_radius ?? tmRaw?.vehicleBorderRadius ?? tmRaw?.border_radius ?? tmRaw?.borderRadius) ?? undefined,
-    vehiclePadding: parseOptionalNumber(tmRaw?.vehicle_padding ?? tmRaw?.vehiclePadding ?? tmRaw?.padding) ?? undefined,
+    scheduleUrl: asString(tmObj.schedule_url ?? tmObj.scheduleUrl ?? cfg.transit_schedule, "/local/gtfs2/transit_schedule.json"),
+    filterGroup: asString(tmObj.filter_group ?? tmObj.filterGroup ?? tmObj.group, "vehicles"),
+    simulate247: Boolean(tmObj.simulate_24_7 ?? tmObj.simulate247 ?? false),
+    vehicleShape: asString(tmObj.vehicle_shape ?? tmObj.vehicleShape ?? tmObj.marker_type ?? tmObj.markerType ?? tmObj.shape) as any,
+    vehicleBackgroundColor: asString(tmObj.vehicle_background_color ?? tmObj.vehicleBackgroundColor ?? tmObj.background_color ?? tmObj.backgroundColor),
+    vehicleBorderColor: asString(tmObj.vehicle_border_color ?? tmObj.vehicleBorderColor ?? tmObj.border_color ?? tmObj.borderColor),
+    vehicleBorderWidth: asFiniteNumber(tmObj.vehicle_border_width ?? tmObj.vehicleBorderWidth ?? tmObj.border_width ?? tmObj.borderWidth, undefined, 0, 32),
+    vehicleBorderRadius: asFiniteNumber(tmObj.vehicle_border_radius ?? tmObj.vehicleBorderRadius ?? tmObj.border_radius ?? tmObj.borderRadius, undefined, 0, 128),
+    vehiclePadding: asFiniteNumber(tmObj.vehicle_padding ?? tmObj.vehiclePadding ?? tmObj.padding, undefined, 0, 64),
+    vehicleDirectional: tmObj.directional !== undefined ? Boolean(tmObj.directional) : undefined,
     vehicles,
     routes
   };
 
   const entRaw = cfg.entities || [];
-  const entities: CardEntityConfig[] = (Array.isArray(entRaw) ? entRaw : []).map((e: any) => {
-    if (typeof e === "string") {
-      return { entityId: e };
-    }
-    const hasNestedOptions = Boolean(e && typeof e.options === "object" && e.options !== null);
-    const merged = hasNestedOptions ? { ...e, ...e.options } : e;
-    const rawMinZoom = merged.min_zoom ?? merged.minZoom;
-    const pictureBorderWidth = merged.picture_border_width ?? merged.pictureBorderWidth;
-    const borderWidth = merged.border_width ?? merged.borderWidth ?? pictureBorderWidth;
+  const entities: CardEntityConfig[] = (Array.isArray(entRaw) ? entRaw : [])
+    .filter((e: any) => (typeof e === "string" && e.trim().length > 0) || (e && typeof e === "object" && !Array.isArray(e)))
+    .map((e: any) => {
+      if (typeof e === "string") {
+        return { entityId: e };
+      }
+      const hasNestedOptions = Boolean(e && typeof e.options === "object" && e.options !== null && !Array.isArray(e.options));
+      const merged = hasNestedOptions ? { ...e, ...e.options } : e;
+      const rawMinZoom = merged.min_zoom ?? merged.minZoom;
+      const pictureBorderWidth = asFiniteNumber(merged.picture_border_width ?? merged.pictureBorderWidth, undefined, 0, 64);
+      const borderWidth = asFiniteNumber(merged.border_width ?? merged.borderWidth, pictureBorderWidth, 0, 64);
 
-    return {
-      entityId: merged.entity || merged.entity_id || merged.entityId || "",
-      name: hasNestedOptions ? e.options.name : merged.name,
-      nameFilter: hasNestedOptions
-        ? (typeof e.name === "string" && e.name ? e.name : merged.name_filter || merged.nameFilter)
-        : (merged.name_filter || merged.nameFilter),
-      showName: merged.show_name ?? merged.showName,
-      icon: merged.icon,
-      showIcon: merged.show_icon ?? merged.showIcon,
-      picture: merged.picture,
-      pictureAttribute: merged.picture_attribute || merged.pictureAttribute,
-      markerType: merged.marker_type || merged.markerType || merged.shape,
-      pictureShape: merged.picture_shape || merged.pictureShape || merged.picture_aspect || merged.pictureAspect,
-      iconSize: merged.icon_size ?? merged.iconSize,
-      backgroundColor: merged.background_color || merged.backgroundColor || merged.card_background,
-      borderColor: merged.border_color || merged.borderColor,
-      borderWidth,
-      pictureBorderRadius: merged.picture_border_radius ?? merged.pictureBorderRadius ?? merged.border_radius ?? merged.borderRadius,
-      pictureBorderWidth,
-      picturePadding: merged.picture_padding ?? merged.picturePadding ?? merged.padding,
-      pictureHeight: merged.picture_height ?? merged.pictureHeight,
-      pictureMaxWidth: merged.picture_max_width ?? merged.pictureMaxWidth,
-      minZoom: parseOptionalNumber(rawMinZoom),
-      follow: merged.follow,
-      transitType: merged.transit_type || merged.transitType,
-      filterGroup: merged.filter_group || merged.filterGroup || merged.group,
-      popupTemplate: merged.popup_template || merged.popupTemplate,
-      popupCard: merged.popup_card || merged.popupCard,
-      popupMaxWidth: merged.popup_max_width ?? merged.popupMaxWidth
-    };
-  });
+      return {
+        entityId: asString(merged.entity ?? merged.entity_id ?? merged.entityId, "") || "",
+        name: hasNestedOptions ? asString(e.options.name) : asString(merged.name),
+        nameFilter: hasNestedOptions
+          ? (typeof e.name === "string" && e.name ? e.name : asString(merged.name_filter ?? merged.nameFilter))
+          : asString(merged.name_filter ?? merged.nameFilter),
+        showName: merged.show_name ?? merged.showName,
+        icon: asString(merged.icon),
+        showIcon: merged.show_icon ?? merged.showIcon,
+        picture: asString(merged.picture),
+        pictureAttribute: asString(merged.picture_attribute ?? merged.pictureAttribute),
+        markerType: asString(merged.marker_type ?? merged.markerType ?? merged.shape) as any,
+        pictureShape: asString(merged.picture_shape ?? merged.pictureShape ?? merged.picture_aspect ?? merged.pictureAspect) as any,
+        iconSize: asFiniteNumber(merged.icon_size ?? merged.iconSize, undefined, 1, 512),
+        backgroundColor: asString(merged.background_color ?? merged.backgroundColor ?? merged.card_background),
+        borderColor: asString(merged.border_color ?? merged.borderColor),
+        borderWidth,
+        pictureBorderRadius: asFiniteNumber(merged.picture_border_radius ?? merged.pictureBorderRadius ?? merged.border_radius ?? merged.borderRadius, undefined, 0, 256),
+        pictureBorderWidth,
+        picturePadding: asFiniteNumber(merged.picture_padding ?? merged.picturePadding ?? merged.padding, undefined, 0, 128),
+        pictureHeight: asFiniteNumber(merged.picture_height ?? merged.pictureHeight, undefined, 1, 512),
+        pictureMaxWidth: asFiniteNumber(merged.picture_max_width ?? merged.pictureMaxWidth, undefined, 1, 1024),
+        minZoom: parseOptionalNumber(rawMinZoom),
+        follow: merged.follow,
+        transitType: asString(merged.transit_type ?? merged.transitType),
+        filterGroup: asString(merged.filter_group ?? merged.filterGroup ?? merged.group),
+        popupTemplate: asString(merged.popup_template ?? merged.popupTemplate),
+        popupCard: merged.popup_card ?? merged.popupCard,
+        popupMaxWidth: asFiniteNumber(merged.popup_max_width ?? merged.popupMaxWidth, undefined, 80, 1200)
+      };
+    });
 
   return {
     apiKey,

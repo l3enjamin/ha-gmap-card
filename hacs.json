@@ -1,5 +1,5 @@
 {
-  "name": "Google Maps Card (Clean)",
+  "name": "HA GMap Card & GTFS Transit",
   "render_readme": true,
-  "filename": "ha-gmap-card.js"
+  "homeassistant": "2024.4.0"
 }

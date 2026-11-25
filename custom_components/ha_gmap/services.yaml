@@ -1,0 +1,3 @@
+refresh_gtfs:
+  name: Refresh GTFS Schedule & GeoJSON
+  description: Re-export transit_schedule.json and route GeoJSON files from the configured GTFS source.

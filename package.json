@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/ha-gmap-card.js",
   "scripts": {
-    "build": "bun build src/index.ts --outfile dist/ha-gmap-card.js --minify --target browser",
+    "build": "bun build src/index.ts --outfile dist/ha-gmap-card.js --minify --target browser && mkdir -p custom_components/ha_gmap/frontend && cp dist/ha-gmap-card.js custom_components/ha_gmap/frontend/ha-gmap-card.js && gzip -k -f custom_components/ha_gmap/frontend/ha-gmap-card.js",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

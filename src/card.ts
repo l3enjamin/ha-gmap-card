@@ -10,7 +10,12 @@ import {
   resolveMdiIconDataUrl,
   TransitMotionEngine
 } from "./transit/motion";
-import { extractRouteKeys, findUpcomingArrivalsForStation, matchEntityPattern } from "./transit/schedule";
+import {
+  extractRouteKeys,
+  findUpcomingArrivalsForStation,
+  haversineMeters,
+  matchEntityPattern
+} from "./transit/schedule";
 
 const geoJsonCache = new Map<string, Promise<any>>();
 
@@ -388,6 +393,7 @@ export class HaGmapCard extends LitElement {
               },
               entityMarkers: this._markers,
               routePolylines: this._routePolylines,
+              hasMapId: Boolean(this._config.mapId),
               isEntityFilterActive: (entityId: string) => {
                 const cfg = this._markerConfigs.get(entityId) || this._transitMotion?.getEntityConfig(entityId);
                 return cfg ? this.isEntityFilterActive(cfg) : true;
@@ -537,7 +543,18 @@ export class HaGmapCard extends LitElement {
         g.padding,
         g.stationIcon,
         g.stopIcon,
-        g.filterGroup
+        g.filterGroup,
+        g.showLabels,
+        g.labelSpacing,
+        g.labelSize,
+        g.labelColor,
+        g.labelTextColor,
+        g.labelShape,
+        g.labelBorderColor,
+        g.labelBorderWidth,
+        g.labelBorderRadius,
+        g.labelPadding,
+        g.labelMinZoom
       ])
     );
   }
@@ -582,8 +599,9 @@ export class HaGmapCard extends LitElement {
                 arrivals
                   .map((a) => {
                     const rCfg = this._config.transitMotion.routes?.[a.lineKey];
-                    const badgeLabel = escapeHtml(rCfg?.label || rCfg?.name || a.lineKey);
-                    const badgeBg = escapeHtml(rCfg?.color || lineColor);
+                    const sMeta = schedule.routes?.[a.lineKey] || schedule.routes?.[a.lineKey.toLowerCase()];
+                    const badgeLabel = escapeHtml(rCfg?.label || rCfg?.name || sMeta?.label || sMeta?.shortName || a.lineKey);
+                    const badgeBg = escapeHtml(rCfg?.color || sMeta?.color || lineColor);
                     const dir = escapeHtml(a.headsign);
                     const minLabel = a.minutesAway === 0 ? "Now" : `${a.minutesAway}m`;
                     return (
@@ -632,10 +650,85 @@ export class HaGmapCard extends LitElement {
 
       fetchPromise.then((geoData) => {
         if (!geoData || this._geoLayers.get(layerCfg.url) !== dataLayer) return;
-        dataLayer.addGeoJson(geoData);
+        const preparedGeo = this.prepareGeoJsonWithLabels(geoData, layerCfg);
+        dataLayer.addGeoJson(preparedGeo);
         this.indexGeoJsonPolylines(geoData, layerCfg);
+        if (layerCfg.labelMinZoom !== undefined && typeof this._map?.addListener === "function") {
+          this._map.addListener("zoom_changed", () => {
+            if (this._geoLayers.get(layerCfg.url) === dataLayer) {
+              dataLayer.setStyle((feature: any) => this.computeGeoFeatureStyle(dataLayer, feature, layerCfg));
+            }
+          });
+        }
       });
     }
+  }
+
+  private prepareGeoJsonWithLabels(geoData: any, layerCfg: GeoJsonLayerConfig): any {
+    if (!geoData || !Array.isArray(geoData.features)) return geoData;
+    if (layerCfg.labelSpacing === undefined) return geoData;
+
+    const spacing = Math.max(50, layerCfg.labelSpacing);
+    const labelText = layerCfg.label || layerCfg.name || "";
+    const filteredFeatures = geoData.features.filter((f: any) => {
+      const p = f?.properties || {};
+      const pt = String(p.point_type || p.type || "").toLowerCase();
+      return pt !== "badge" && !p.badge;
+    });
+
+    if (layerCfg.showLabels === false || !labelText) {
+      return { ...geoData, features: filteredFeatures };
+    }
+
+    const generatedBadges: any[] = [];
+    const seenBuckets = new Set<string>();
+    const addLineCoords = (coords: any[], props: any) => {
+      if (!Array.isArray(coords) || coords.length < 2) return;
+      let accum = spacing * 0.5;
+      for (let i = 0; i < coords.length - 1; i++) {
+        const a = coords[i];
+        const b = coords[i + 1];
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) continue;
+        const segLen = haversineMeters(a[1], a[0], b[1], b[0]);
+        if (!Number.isFinite(segLen) || segLen <= 0) continue;
+        let walked = 0;
+        while (accum + (segLen - walked) >= spacing) {
+          const need = spacing - accum;
+          const frac = (walked + need) / segLen;
+          const lng = a[0] + (b[0] - a[0]) * frac;
+          const lat = a[1] + (b[1] - a[1]) * frac;
+          const bucketKey = `${Math.round(lat * 500)},${Math.round(lng * 500)}`;
+          if (!seenBuckets.has(bucketKey)) {
+            seenBuckets.add(bucketKey);
+            generatedBadges.push({
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [lng, lat] },
+              properties: {
+                point_type: "badge",
+                badge: labelText,
+                name: labelText,
+                color: props?.color || props?.strokeColor || layerCfg.strokeColor
+              }
+            });
+          }
+          walked += need;
+          accum = 0;
+        }
+        accum += segLen - walked;
+      }
+    };
+
+    for (const f of filteredFeatures) {
+      const geom = f?.geometry;
+      if (!geom) continue;
+      if (geom.type === "LineString") {
+        addLineCoords(geom.coordinates, f.properties);
+      } else if (geom.type === "MultiLineString" && Array.isArray(geom.coordinates)) {
+        for (const line of geom.coordinates) addLineCoords(line, f.properties);
+      }
+    }
+
+    return { ...geoData, features: [...filteredFeatures, ...generatedBadges] };
   }
 
   private computeGeoFeatureStyle(dataLayer: any, feature: any, layerCfg: GeoJsonLayerConfig) {
@@ -659,19 +752,50 @@ export class HaGmapCard extends LitElement {
     const clickable = layerCfg.showPopup !== false;
 
     if (pointType === "badge" || featType === "badge" || badgeProp) {
+      if (layerCfg.showLabels === false) {
+        return { visible: false };
+      }
+      if (layerCfg.labelMinZoom !== undefined && this._map) {
+        const curZ = typeof this._map.getZoom === "function" ? this._map.getZoom() : 15;
+        if (curZ < layerCfg.labelMinZoom) {
+          return { visible: false };
+        }
+      }
       const badgeText = String(badgeProp || layerCfg.label || layerCfg.name || "").trim();
-      const badgeColor = String(feature.getProperty("color") || sColor || "#007aff");
+      const badgeColor = String(layerCfg.labelColor || feature.getProperty("color") || sColor || "#007aff");
+      const textColor = String(layerCfg.labelTextColor || "#ffffff");
+      const lShape = layerCfg.labelShape || "pill";
+      const h = layerCfg.labelSize ?? 22;
+      const lBorderColor = layerCfg.labelBorderColor || "#ffffff";
+      const lBorderWidth = layerCfg.labelBorderWidth ?? 1.5;
+      const lPad = layerCfg.labelPadding ?? 8;
+      const fontSize = Math.max(8, Math.round(h * 0.5));
       if (badgeText) {
-        const badgeKey = `badge|${badgeText}|${badgeColor}`;
+        const w =
+          lShape === "circle" || lShape === "square"
+            ? h
+            : Math.max(Math.round(h * 1.45), Math.round(badgeText.length * fontSize * 0.65 + lPad * 2));
+        const rx =
+          layerCfg.labelBorderRadius !== undefined
+            ? layerCfg.labelBorderRadius
+            : lShape === "circle"
+              ? Math.max(w, h) / 2
+              : lShape === "pill"
+                ? Math.round(h / 2)
+                : 4;
+        const badgeKey = `badge|${badgeText}|${badgeColor}|${textColor}|${lShape}|${w}|${h}|${lBorderColor}|${lBorderWidth}|${rx}`;
         let badgeIcon = this._geoIconCache.get(badgeKey);
         if (!badgeIcon) {
-          const w = Math.max(32, Math.round(badgeText.length * 7.2 + 16));
-          const h = 22;
           const safeText = escapeHtml(badgeText);
+          const halfBw = lBorderWidth / 2;
+          const shapeEl =
+            lShape === "circle"
+              ? `<circle cx='${w / 2}' cy='${h / 2}' r='${Math.max(1, Math.min(w, h) / 2 - halfBw)}' fill='${badgeColor}'${lBorderWidth > 0 ? ` stroke='${lBorderColor}' stroke-width='${lBorderWidth}'` : ""}/>`
+              : `<rect x='${halfBw}' y='${halfBw}' width='${Math.max(1, w - lBorderWidth)}' height='${Math.max(1, h - lBorderWidth)}' rx='${rx}' fill='${badgeColor}'${lBorderWidth > 0 ? ` stroke='${lBorderColor}' stroke-width='${lBorderWidth}'` : ""}/>`;
           const badgeSvg =
             `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>` +
-            `<rect x='1' y='1' width='${w - 2}' height='${h - 2}' rx='10' fill='${badgeColor}' stroke='#ffffff' stroke-width='1.5'/>` +
-            `<text x='${w / 2}' y='14.5' text-anchor='middle' fill='#ffffff' font-family='-apple-system,BlinkMacSystemFont,Roboto,sans-serif' font-size='11' font-weight='700'>${safeText}</text>` +
+            shapeEl +
+            `<text x='${w / 2}' y='${h / 2}' dominant-baseline='central' text-anchor='middle' fill='${textColor}' font-family='-apple-system,BlinkMacSystemFont,Roboto,sans-serif' font-size='${fontSize}' font-weight='700'>${safeText}</text>` +
             `</svg>`;
           badgeIcon = {
             url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(badgeSvg),

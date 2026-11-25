@@ -13,6 +13,15 @@ export interface TransitProfile {
 
 export type ScheduleTripTuple = [number, number]; // [startSec, profileIdx]
 
+export interface TransitScheduleRouteMeta {
+  label?: string;
+  shortName?: string;
+  color?: string;
+  textColor?: string;
+  routeType?: number;
+  geojsonUrl?: string;
+}
+
 export interface TransitSchedule {
   profiles: TransitProfile[];
   trips?:
@@ -23,11 +32,18 @@ export interface TransitSchedule {
         service_id?: string;
         route?: string;
       }>;
+  routes?: Record<string, TransitScheduleRouteMeta>;
+  service_ids?: {
+    weekday?: string[];
+    saturday?: string[];
+    sunday?: string[];
+  };
 }
 
 export interface InterpolatedCoord {
   lat: number;
   lng: number;
+  bearing?: number;
 }
 
 export interface ActiveScheduledTrip {
@@ -61,14 +77,38 @@ export function resolveServiceDaySeconds(
   return sec;
 }
 
+export function computeBearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = Math.PI / 180;
+  const phi1 = lat1 * toRad;
+  const phi2 = lat2 * toRad;
+  const dLambda = (lng2 - lng1) * toRad;
+  const y = Math.sin(dLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+  if (x === 0 && y === 0) return 0;
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function isValidPt(pt: unknown): pt is [number, number, number] {
+  return (
+    Array.isArray(pt) &&
+    pt.length >= 3 &&
+    Number.isFinite(pt[0]) &&
+    Number.isFinite(pt[1]) &&
+    Number.isFinite(pt[2]) &&
+    Math.abs(pt[1]) <= 90 &&
+    Math.abs(pt[2]) <= 180
+  );
+}
+
 /**
- * Interpolates smooth (lat, lng) position along trip vertices.
+ * Interpolates smooth (lat, lng) position and heading along trip vertices.
  */
 export function interpolateTripPosition(
   pts: [number, number, number][],
   elapsedSec: number
 ): InterpolatedCoord | null {
-  if (!pts || pts.length < 2) return null;
+  if (!Array.isArray(pts) || pts.length < 2 || !Number.isFinite(elapsedSec)) return null;
+  if (!isValidPt(pts[0]) || !isValidPt(pts[pts.length - 1])) return null;
   const startSec = pts[0][0];
   const endSec = pts[pts.length - 1][0];
 
@@ -77,23 +117,71 @@ export function interpolateTripPosition(
   }
 
   for (let j = 0; j < pts.length - 1; j++) {
+    if (!isValidPt(pts[j]) || !isValidPt(pts[j + 1])) continue;
     const t0 = pts[j][0];
     const t1 = pts[j + 1][0];
     if (t0 <= elapsedSec && elapsedSec <= t1) {
       const frac = t1 > t0 ? (elapsedSec - t0) / (t1 - t0) : 0;
       const lat = pts[j][1] + (pts[j + 1][1] - pts[j][1]) * frac;
       const lng = pts[j][2] + (pts[j + 1][2] - pts[j][2]) * frac;
-      return { lat, lng };
+      // Look ahead if segment is stationary dwell (same coords)
+      let bearing = computeBearingDeg(pts[j][1], pts[j][2], pts[j + 1][1], pts[j + 1][2]);
+      if (pts[j][1] === pts[j + 1][1] && pts[j][2] === pts[j + 1][2]) {
+        for (let k = j + 1; k < pts.length - 1; k++) {
+          if (isValidPt(pts[k]) && isValidPt(pts[k + 1]) && (pts[k][1] !== pts[k + 1][1] || pts[k][2] !== pts[k + 1][2])) {
+            bearing = computeBearingDeg(pts[k][1], pts[k][2], pts[k + 1][1], pts[k + 1][2]);
+            break;
+          }
+        }
+      }
+      return { lat, lng, bearing };
     }
   }
 
   return null;
 }
 
+function resolveServiceTripsForDay(
+  schedule: TransitSchedule,
+  lineMap: Record<string, ScheduleTripTuple[]> | undefined,
+  serviceDay: number
+): ScheduleTripTuple[] {
+  if (!lineMap || typeof lineMap !== "object" || Array.isArray(lineMap)) return [];
+  const dayBucket = serviceDay === 0 ? "sunday" : serviceDay === 6 ? "saturday" : "weekday";
+  const canonicalId = serviceDay === 0 ? "3" : serviceDay === 6 ? "2" : "1";
+
+  const configuredIds = schedule.service_ids?.[dayBucket];
+  if (Array.isArray(configuredIds) && configuredIds.length > 0) {
+    const combined: ScheduleTripTuple[] = [];
+    for (const sid of configuredIds) {
+      const arr = lineMap[String(sid)];
+      if (Array.isArray(arr)) combined.push(...arr);
+    }
+    if (combined.length > 0) return combined;
+  }
+
+  if (Array.isArray(lineMap[canonicalId])) return lineMap[canonicalId];
+  if (Array.isArray(lineMap[dayBucket])) return lineMap[dayBucket];
+
+  const pattern =
+    dayBucket === "sunday"
+      ? /^(sun|sunday|su\b)/i
+      : dayBucket === "saturday"
+        ? /^(sat|saturday|sa\b)/i
+        : /^(wd|wkd|weekday|mon|mtwtf)/i;
+
+  for (const [sid, arr] of Object.entries(lineMap)) {
+    if (pattern.test(sid) && Array.isArray(arr)) {
+      return arr;
+    }
+  }
+  return [];
+}
+
 /**
- * Resolves active scheduled trips from real GTFS2 schedule schema
- * (`trips[lineKey][serviceId] = [[startSec, profileIdx], ...]`), with a
- * 24/7 daytime simulation fallback when overnight matchedCount is 0.
+ * Resolves active scheduled trips from GTFS schedule schema
+ * (`trips[lineKey][serviceId] = [[startSec, profileIdx], ...]`), with optional
+ * 24/7 daytime simulation fallback when `simulate247` is true.
  */
 export function findActiveScheduledTrips(
   schedule: TransitSchedule | null | undefined,
@@ -101,7 +189,10 @@ export function findActiveScheduledTrips(
   routesCfg?: Record<string, TransitRouteConfig>,
   options?: { simulate247?: boolean; rolloverHour?: number }
 ): ActiveScheduledTrip[] {
-  if (!schedule || !Array.isArray(schedule.profiles) || !schedule.trips || Array.isArray(schedule.trips)) {
+  if (!schedule || !Array.isArray(schedule.profiles) || !schedule.trips || typeof schedule.trips !== "object" || Array.isArray(schedule.trips)) {
+    return [];
+  }
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
     return [];
   }
 
@@ -109,7 +200,6 @@ export function findActiveScheduledTrips(
   const hours = date.getHours();
   const isPostMidnight = hours < rollover;
   const serviceDay = isPostMidnight ? (date.getDay() + 6) % 7 : date.getDay();
-  const serviceId = serviceDay === 0 ? "3" : serviceDay === 6 ? "2" : "1";
   const secNow = resolveServiceDaySeconds(date, { rolloverHour: rollover });
 
   const tripsByLine = schedule.trips;
@@ -122,13 +212,18 @@ export function findActiveScheduledTrips(
 
   let matchedCount = 0;
   for (const lineKey of lineKeys) {
-    const lineTrips = tripsByLine[lineKey]?.[serviceId] || [];
+    const lineTrips = resolveServiceTripsForDay(schedule, tripsByLine[lineKey], serviceDay);
     for (let i = 0; i < lineTrips.length; i++) {
-      const [startSec, pid] = lineTrips[i];
+      const tuple = lineTrips[i];
+      if (!Array.isArray(tuple) || tuple.length < 2) continue;
+      const startSec = Number(tuple[0]);
+      const pid = Number(tuple[1]);
+      if (!Number.isFinite(startSec) || !Number.isInteger(pid) || pid < 0 || pid >= schedule.profiles.length) continue;
       const prof = schedule.profiles[pid];
-      if (!prof || !prof.pts || prof.pts.length < 2) continue;
-      const runtime = prof.pts[prof.pts.length - 1][0];
-      const endSec = startSec + runtime;
+      if (!prof || !Array.isArray(prof.pts) || prof.pts.length < 2) continue;
+      const lastPt = prof.pts[prof.pts.length - 1];
+      if (!isValidPt(lastPt)) continue;
+      const endSec = startSec + lastPt[0];
       if (startSec <= secNow && secNow <= endSec) {
         matchedCount++;
       }
@@ -143,17 +238,22 @@ export function findActiveScheduledTrips(
     matchedCount === 0
       ? (((Math.floor(secNow) - 18300) % 54000 + 54000) % 54000 + 25200)
       : secNow;
-  const effServiceId = matchedCount === 0 ? "1" : serviceId;
+  const effDay = matchedCount === 0 ? 1 : serviceDay;
 
   const result: ActiveScheduledTrip[] = [];
   for (const lineKey of lineKeys) {
-    const lineTrips = tripsByLine[lineKey]?.[effServiceId] || [];
+    const lineTrips = resolveServiceTripsForDay(schedule, tripsByLine[lineKey], effDay);
     for (let i = 0; i < lineTrips.length; i++) {
-      const [startSec, pid] = lineTrips[i];
+      const tuple = lineTrips[i];
+      if (!Array.isArray(tuple) || tuple.length < 2) continue;
+      const startSec = Number(tuple[0]);
+      const pid = Number(tuple[1]);
+      if (!Number.isFinite(startSec) || !Number.isInteger(pid) || pid < 0 || pid >= schedule.profiles.length) continue;
       const prof = schedule.profiles[pid];
-      if (!prof || !prof.pts || prof.pts.length < 2) continue;
-      const runtime = prof.pts[prof.pts.length - 1][0];
-      const endSec = startSec + runtime;
+      if (!prof || !Array.isArray(prof.pts) || prof.pts.length < 2) continue;
+      const lastPt = prof.pts[prof.pts.length - 1];
+      if (!isValidPt(lastPt)) continue;
+      const endSec = startSec + lastPt[0];
       if (startSec <= effSec && effSec <= endSec) {
         result.push({
           key: `scheduled_${lineKey}_${startSec}_${pid}`,
@@ -251,7 +351,8 @@ export function advanceAlongPolylines(
       const frac = segDist > 0 ? remainingMeters / segDist : 0;
       return {
         lat: curP.lat + (nextP.lat - curP.lat) * frac,
-        lng: curP.lng + (nextP.lng - curP.lng) * frac
+        lng: curP.lng + (nextP.lng - curP.lng) * frac,
+        bearing: computeBearingDeg(curP.lat, curP.lng, nextP.lat, nextP.lng)
       };
     }
     remainingMeters -= segDist;
@@ -294,7 +395,7 @@ export function extractRouteKeys(url?: string, routeKey?: string, name?: string)
     const clean = file.replace(/\.(geo)?json$/i, "").trim().toLowerCase();
     if (clean) {
       keys.add(clean);
-      const stripped = clean.replace(/^route_/, "").replace(/^skytrain_/, "");
+      const stripped = clean.replace(/^(route|skytrain|line|rail|metro|subway|train|tram)_/, "");
       if (stripped) keys.add(stripped);
     }
   }
@@ -334,7 +435,10 @@ export function findUpcomingArrivalsForStation(
     rolloverHour?: number;
   }
 ): StationArrival[] {
-  if (!schedule || !Array.isArray(schedule.profiles) || !schedule.trips || Array.isArray(schedule.trips)) {
+  if (!schedule || !Array.isArray(schedule.profiles) || !schedule.trips || typeof schedule.trips !== "object" || Array.isArray(schedule.trips)) {
+    return [];
+  }
+  if (!Number.isFinite(stationLat) || !Number.isFinite(stationLng) || !(date instanceof Date) || Number.isNaN(date.getTime())) {
     return [];
   }
 
@@ -345,17 +449,17 @@ export function findUpcomingArrivalsForStation(
 
   const isPostMidnight = date.getHours() < rollover;
   const serviceDay = isPostMidnight ? (date.getDay() + 6) % 7 : date.getDay();
-  const serviceId = serviceDay === 0 ? "3" : serviceDay === 6 ? "2" : "1";
   const secNow = resolveServiceDaySeconds(date, { rolloverHour: rollover });
 
   // Precompute offset in seconds along each profile matching this station
   const profileStationOffset = new Map<number, number>();
   for (let pid = 0; pid < schedule.profiles.length; pid++) {
     const pts = schedule.profiles[pid]?.pts;
-    if (!pts || pts.length < 2) continue;
+    if (!Array.isArray(pts) || pts.length < 2) continue;
     let bestDist = Infinity;
     let bestTime = -1;
     for (let j = 0; j < pts.length; j++) {
+      if (!isValidPt(pts[j])) continue;
       const d = haversineMeters(stationLat, stationLng, pts[j][1], pts[j][2]);
       if (d < bestDist) {
         bestDist = d;
@@ -375,9 +479,13 @@ export function findUpcomingArrivalsForStation(
 
   const arrivals: StationArrival[] = [];
   for (const lineKey of targetLines) {
-    const lineTrips = schedule.trips[lineKey]?.[serviceId] || [];
+    const lineTrips = resolveServiceTripsForDay(schedule, schedule.trips[lineKey], serviceDay);
     for (let i = 0; i < lineTrips.length; i++) {
-      const [startSec, pid] = lineTrips[i];
+      const tuple = lineTrips[i];
+      if (!Array.isArray(tuple) || tuple.length < 2) continue;
+      const startSec = Number(tuple[0]);
+      const pid = Number(tuple[1]);
+      if (!Number.isFinite(startSec) || !Number.isInteger(pid)) continue;
       const offsetSec = profileStationOffset.get(pid);
       if (offsetSec === undefined) continue;
       const arrivalSec = startSec + offsetSec;

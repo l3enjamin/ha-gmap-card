@@ -1,0 +1,41 @@
+name: HA GMap CI & Resilience Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend-resilience:
+    name: TypeScript, Fuzz Tests & Bundle Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+      - name: Verify bundled frontend asset exists
+        run: |
+          test -s custom_components/ha_gmap/frontend/ha-gmap-card.js
+          test -s custom_components/ha_gmap/frontend/ha-gmap-card.js.gz
+
+  backend-gtfs-resilience:
+    name: Python GTFS Exporter & Malformed Input Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: pip install pytest
+      - name: Validate manifest.json & hacs.json
+        run: |
+          python3 -c 'import json; m=json.load(open("custom_components/ha_gmap/manifest.json")); assert m["domain"]=="ha_gmap" and m["config_flow"] is True; h=json.load(open("hacs.json")); assert h["name"]'
+      - name: Run malformed GTFS & exporter tests
+        run: pytest -v tests/test_gtfs_exporter.py

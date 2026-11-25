@@ -1,0 +1,13 @@
+{
+  "domain": "ha_gmap",
+  "name": "HA GMap Card & GTFS Transit",
+  "codeowners": ["@l3enjamin"],
+  "config_flow": true,
+  "dependencies": ["http"],
+  "documentation": "https://github.com/l3enjamin/ha-gmap-card",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/l3enjamin/ha-gmap-card/issues",
+  "requirements": [],
+  "version": "1.1.0"
+}

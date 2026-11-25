@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure GTFS Transit Map Exporter",
+        "description": "Select a local GTFS .zip/.sqlite file or enter a remote GTFS static .zip URL to generate transit_schedule.json and route GeoJSONs.",
+        "data": {
+          "source": "GTFS Source (.zip URL, local .zip, or .sqlite)",
+          "output_dir": "Output folder under www/",
+          "route_types": "Transit Route Types to export",
+          "scan_interval_hours": "Refresh check interval (hours)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not read or download the specified GTFS source.",
+      "invalid_gtfs": "Source does not appear to be a valid GTFS .zip or .sqlite file."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HA GMap GTFS Options",
+        "data": {
+          "source": "GTFS Source (.zip URL, local .zip, or .sqlite)",
+          "output_dir": "Output folder under www/",
+          "route_types": "Transit Route Types to export",
+          "route_filter": "Optional specific route IDs/names",
+          "scan_interval_hours": "Refresh check interval (hours)"
+        }
+      }
+    }
+  }
+}

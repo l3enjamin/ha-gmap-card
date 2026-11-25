@@ -222,16 +222,67 @@ export function resolveMdiIconDataUrl(
   return null;
 }
 
+export function buildTriangleSvgDataUrl(opts: {
+  size?: number;
+  fillColor?: string;
+  borderColor?: string;
+  borderWidth?: number;
+} = {}): string {
+  const sz = Number(opts.size) || 24;
+  const fill = opts.fillColor || "#0072CE";
+  const stroke = opts.borderColor || "#ffffff";
+  const sw = opts.borderWidth ?? 1.5;
+  const svg =
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}'>` +
+    `<polygon points='12,2 21,21 12,17 3,21' fill='${fill}' stroke='${stroke}' stroke-width='${sw}' stroke-linejoin='round'/>` +
+    `</svg>`;
+  return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
+}
+
 export function getTransitVehicleIcon(
   googleMaps: any,
   routeKey: string,
   motionCfg: TransitMotionConfig,
   routeType: "subway" | "bus",
-  onAsyncReady?: (iconObj: any) => void
+  onAsyncReady?: (iconObj: any) => void,
+  schedule?: TransitSchedule | null,
+  bearingDeg = 0
 ): any {
   const rKeyLower = String(routeKey || "").toLowerCase();
   const routeCfg = motionCfg.routes?.[routeKey] || motionCfg.routes?.[rKeyLower] || {};
+  const schedRouteMeta = schedule?.routes?.[routeKey] || schedule?.routes?.[rKeyLower];
   const vehicles = motionCfg.vehicles || {};
+
+  const sz = Number(routeCfg.iconSize || 26);
+  const shape = routeCfg.shape ?? motionCfg.vehicleShape;
+  const bgColor = routeCfg.backgroundColor ?? motionCfg.vehicleBackgroundColor ?? routeCfg.color ?? schedRouteMeta?.color;
+  const borderColor = routeCfg.borderColor ?? motionCfg.vehicleBorderColor;
+  const borderWidth = routeCfg.borderWidth ?? motionCfg.vehicleBorderWidth;
+  const borderRadius = routeCfg.borderRadius ?? motionCfg.vehicleBorderRadius;
+  const padding = routeCfg.padding ?? motionCfg.vehiclePadding;
+
+  if (shape === "triangle" || shape === "arrow") {
+    const fillColor = bgColor || (routeType === "bus" ? "#008542" : "#0072CE");
+    const strokeColor = borderColor || "#ffffff";
+    const sw = borderWidth ?? 1.5;
+    if (googleMaps?.SymbolPath?.FORWARD_CLOSED_ARROW !== undefined) {
+      return {
+        path: googleMaps.SymbolPath.FORWARD_CLOSED_ARROW,
+        scale: Math.max(3, sz / 4.2),
+        fillColor,
+        fillOpacity: 1,
+        strokeColor,
+        strokeWeight: sw,
+        rotation: bearingDeg
+      };
+    }
+    const triUrl = buildTriangleSvgDataUrl({ size: sz, fillColor, borderColor: strokeColor, borderWidth: sw });
+    return {
+      url: triUrl,
+      scaledSize: new googleMaps.Size(sz, sz),
+      anchor: new googleMaps.Point(sz / 2, sz / 2)
+    };
+  }
 
   const iconSpec =
     routeCfg.image ||
@@ -244,13 +295,6 @@ export function getTransitVehicleIcon(
     DEFAULT_VEHICLE_ICONS[routeType] ||
     (routeType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
 
-  const sz = Number(routeCfg.iconSize || 26);
-  const shape = routeCfg.shape ?? motionCfg.vehicleShape;
-  const bgColor = routeCfg.backgroundColor ?? motionCfg.vehicleBackgroundColor;
-  const borderColor = routeCfg.borderColor ?? motionCfg.vehicleBorderColor;
-  const borderWidth = routeCfg.borderWidth ?? motionCfg.vehicleBorderWidth;
-  const borderRadius = routeCfg.borderRadius ?? motionCfg.vehicleBorderRadius;
-  const padding = routeCfg.padding ?? motionCfg.vehiclePadding;
   const w = shape === "rectangle" ? Math.round(sz * 1.4) : sz;
   const hasBadgeStyle = Boolean(
     (shape && shape !== "auto" && shape !== "icon") ||
@@ -286,12 +330,32 @@ export function getTransitVehicleIcon(
     return makeIconObj(svgUrl);
   }
 
+  // If no custom icon was configured but schedule/route has a color, render a colored subway/bus SVG badge
+  if (!routeCfg.icon && !routeCfg.image && !vehicles[routeKey] && !vehicles[rKeyLower] && !vehicles[routeType] && schedRouteMeta?.color) {
+    const colorUrl = buildSvgBadgeDataUrl(
+      routeType === "bus"
+        ? "<path d='M16 9.5H8v-3h8v3zm-.8-5.5H8.8c-1.8 0-2.8 1-2.8 2.8v7.4c0 1.2.8 2.2 2 2.2v1.6c0 .5.4 1 1 1h.5c.6 0 1-.5 1-1V16h3v1.6c0 .5.4 1 1 1h.5c.6 0 1-.5 1-1V16c1.2 0 2-1 2-2.2V6.8c0-1.8-1-2.8-2.8-2.8z' fill='#ffffff'/>"
+        : "<path d='M12 4c-3.5 0-6 .4-6 3.5v7c0 1.9 1.3 3.5 3 3.5L8 19.5v.5h8v-.5L15 18c1.7 0 3-1.6 3-3.5v-7c0-3.1-2.5-3.5-6-3.5zm-3 11a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4zm6 0a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4zm1-5H8V7.5h8V10z' fill='#ffffff'/>",
+      "0 0 24 24",
+      {
+        size: sz,
+        shape: shape || "circle",
+        bgColor: schedRouteMeta.color,
+        borderColor: borderColor || "#ffffff",
+        borderWidth: borderWidth ?? 1.5,
+        borderRadius,
+        padding: padding ?? 2
+      }
+    );
+    return makeIconObj(colorUrl, w, sz);
+  }
+
   if (typeof iconSpec === "string" && iconSpec.trim().startsWith("mdi:")) {
     const fallbackUrl =
       DEFAULT_VEHICLE_ICONS[rKeyLower] ||
       DEFAULT_VEHICLE_ICONS[routeType] ||
       (routeType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
-    const resolvedBg = bgColor || routeCfg.color || (routeType === "bus" ? "#008542" : "#0072CE");
+    const resolvedBg = bgColor || routeCfg.color || schedRouteMeta?.color || (routeType === "bus" ? "#008542" : "#0072CE");
     const cachedUrl = resolveMdiIconDataUrl(
       iconSpec,
       {
@@ -327,6 +391,8 @@ interface ActiveTripMarkerState {
   pts: [number, number, number][];
   startSec: number;
   simOffset: number;
+  lineKey: string;
+  lastBearing?: number;
 }
 
 export interface TransitMotionHost {
@@ -334,6 +400,7 @@ export interface TransitMotionHost {
   entityMarkers: Map<string, any>;
   routePolylines: Map<string, number[][][]>;
   isEntityFilterActive: (entityId: string) => boolean;
+  hasMapId?: boolean;
 }
 
 export class TransitMotionEngine {
@@ -580,20 +647,31 @@ export class TransitMotionEngine {
 
     for (const trip of active) {
       activeKeys.add(trip.key);
+      const prevTrip = this.activeTrips.get(trip.key);
       this.activeTrips.set(trip.key, {
         pts: trip.profile.pts,
         startSec: trip.startSec,
-        simOffset: trip.simOffset
+        simOffset: trip.simOffset,
+        lineKey: trip.lineKey,
+        lastBearing: prevTrip?.lastBearing
       });
 
       if (!this.scheduledMarkers.has(trip.key)) {
         const routeCfg =
           this.motionConfig.routes?.[trip.lineKey] ||
           this.motionConfig.routes?.[trip.lineKey.toLowerCase()];
-        const routeLabel = routeCfg?.label || routeCfg?.name || "";
+        const schedMeta =
+          this.schedule.routes?.[trip.lineKey] ||
+          this.schedule.routes?.[trip.lineKey.toLowerCase()];
+        const routeLabel = routeCfg?.label || routeCfg?.name || schedMeta?.label || "";
         const baseTitle = trip.profile.h || trip.lineKey;
         const markerTitle = routeLabel ? `${routeLabel} · ${baseTitle}` : String(baseTitle);
         const show = this.filterActive && !this.isCulled && this.motionConfig.enabled;
+        const shape = routeCfg?.shape ?? this.motionConfig.vehicleShape;
+        const useCssDom =
+          Boolean(this.host.hasMapId) &&
+          Boolean(this.googleMaps.marker?.AdvancedMarkerElement) &&
+          (shape === "triangle" || shape === "arrow" || routeCfg?.directional || this.motionConfig.vehicleDirectional);
 
         let newMarker: any = null;
         const iconObj = getTransitVehicleIcon(
@@ -605,17 +683,42 @@ export class TransitMotionEngine {
             if (newMarker && typeof newMarker.setIcon === "function") {
               newMarker.setIcon(asyncIcon);
             }
-          }
+          },
+          this.schedule
         );
 
-        newMarker = new this.googleMaps.Marker({
-          position: new this.googleMaps.LatLng(trip.profile.pts[0][1], trip.profile.pts[0][2]),
-          map: show ? this.map : null,
-          title: markerTitle,
-          icon: iconObj,
-          zIndex: 250,
-          visible: show
-        });
+        if (useCssDom) {
+          const sz = Number(routeCfg?.iconSize || 26);
+          const fill = routeCfg?.backgroundColor || this.motionConfig.vehicleBackgroundColor || routeCfg?.color || schedMeta?.color || "#0072CE";
+          const stroke = routeCfg?.borderColor || this.motionConfig.vehicleBorderColor || "#ffffff";
+          const sw = routeCfg?.borderWidth ?? this.motionConfig.vehicleBorderWidth ?? 1.5;
+          const wrapper = document.createElement("div");
+          wrapper.style.cssText = `width:${sz}px;height:${sz}px;display:flex;align-items:center;justify-content:center;transition:transform 150ms linear;will-change:transform;`;
+          if (shape === "triangle" || shape === "arrow") {
+            wrapper.innerHTML = `<svg viewBox="0 0 24 24" width="${sz}" height="${sz}" style="display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.45));"><polygon points="12,2 21,21 12,17 3,21" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/></svg>`;
+          } else if (iconObj?.url) {
+            const img = document.createElement("img");
+            img.src = iconObj.url;
+            img.style.cssText = `width:${sz}px;height:${sz}px;object-fit:contain;display:block;`;
+            wrapper.appendChild(img);
+          }
+          newMarker = new this.googleMaps.marker.AdvancedMarkerElement({
+            position: { lat: trip.profile.pts[0][1], lng: trip.profile.pts[0][2] },
+            map: show ? this.map : null,
+            title: markerTitle,
+            content: wrapper,
+            zIndex: 250
+          });
+        } else {
+          newMarker = new this.googleMaps.Marker({
+            position: new this.googleMaps.LatLng(trip.profile.pts[0][1], trip.profile.pts[0][2]),
+            map: show ? this.map : null,
+            title: markerTitle,
+            icon: iconObj,
+            zIndex: 250,
+            visible: show
+          });
+        }
         this.scheduledMarkers.set(trip.key, newMarker);
       }
     }
@@ -687,11 +790,24 @@ export class TransitMotionEngine {
         const inView = bounds ? bounds.contains(latLng) : true;
         if (inView) {
           if (typeof marker.setPosition === "function") marker.setPosition(latLng);
-          else marker.position = latLng;
+          else marker.position = { lat: coord.lat, lng: coord.lng };
+          if (coord.bearing !== undefined && (trip.lastBearing === undefined || Math.abs(coord.bearing - trip.lastBearing) > 0.5)) {
+            trip.lastBearing = coord.bearing;
+            if (marker.content && marker.content.style) {
+              marker.content.style.transform = `rotate(${coord.bearing.toFixed(1)}deg)`;
+            } else if (typeof marker.getIcon === "function" && typeof marker.setIcon === "function") {
+              const curIcon = marker.getIcon();
+              if (curIcon && typeof curIcon === "object" && "path" in curIcon) {
+                marker.setIcon({ ...curIcon, rotation: coord.bearing });
+              }
+            }
+          }
           if (typeof marker.getMap === "function" && !marker.getMap()) marker.setMap(this.map);
+          else if (!("getMap" in marker) && !marker.map) marker.map = this.map;
           if (typeof marker.setVisible === "function") marker.setVisible(true);
         } else {
           if (typeof marker.setVisible === "function") marker.setVisible(false);
+          else if (!("setVisible" in marker)) marker.map = null;
         }
       }
     }
