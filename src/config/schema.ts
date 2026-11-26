@@ -450,9 +450,11 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
   const rawExcludeStates = cfg.exclude_states ?? cfg.excludeStates;
   const excludeStates: string[] = Array.isArray(rawExcludeStates)
     ? rawExcludeStates.map((s: any) => asString(s)).filter((s): s is string => Boolean(s))
-    : rawExcludeStates === false
-      ? []
-      : ["unavailable"];
+    : typeof rawExcludeStates === "string" && rawExcludeStates.trim()
+      ? [rawExcludeStates.trim()]
+      : rawExcludeStates === false
+        ? []
+        : ["unavailable"];
 
   const rawExclude = cfg.exclude ?? cfg.entity_exclude ?? [];
   const exclude: EntityExcludeRule[] = (Array.isArray(rawExclude) ? rawExclude : [])

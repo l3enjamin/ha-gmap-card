@@ -279,6 +279,7 @@ describe("Card Config Normalization & Aliasing", () => {
       { entityId: undefined, state: "off", name: "*Test*" }
     ]);
     expect(normalizeCardConfig({ api_key: "test" }).excludeStates).toEqual(["unavailable"]);
+    expect(normalizeCardConfig({ api_key: "test", exclude_states: "unknown" }).excludeStates).toEqual(["unknown"]);
     expect(normalizeCardConfig({ api_key: "test", exclude_states: false }).excludeStates).toEqual([]);
 
     expect(cfg.transitMotion).toMatchObject({

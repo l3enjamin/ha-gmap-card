@@ -176,6 +176,7 @@ export class HaGmapCard extends LitElement {
     if (!this._map || !this._config) return;
 
     let shouldUpdate = this._markers.size === 0 && this._config.entities.length > 0;
+    let shouldScanWildcards = shouldUpdate;
     if (!shouldUpdate) {
       // Instant check on already-tracked markers (handles live GPS updates for wildcard-matched buses with 0ms delay)
       for (const [eid, prev] of this._lastEntityState.entries()) {
@@ -185,26 +186,24 @@ export class HaGmapCard extends LitElement {
         }
       }
     }
-    if (!shouldUpdate) {
-      const now = Date.now();
-      let hasWildcard = false;
-      for (const ent of this._config.entities) {
-        const eid = ent.entityId;
-        if (!eid) continue;
-        if (eid.includes("*") || eid.includes("?") || (eid.startsWith("/") && eid.lastIndexOf("/") > 0)) {
-          hasWildcard = true;
-        } else if (this._lastEntityState.get(eid) !== hass?.states?.[eid]) {
-          shouldUpdate = true;
-          break;
-        }
-      }
-      if (!shouldUpdate && hasWildcard && now - this._lastWildcardScanMs > 5000) {
+    const now = Date.now();
+    let hasWildcard = false;
+    for (const ent of this._config.entities) {
+      const eid = ent.entityId;
+      if (!eid) continue;
+      if (eid.includes("*") || eid.includes("?") || (eid.startsWith("/") && eid.lastIndexOf("/") > 0)) {
+        hasWildcard = true;
+      } else if (!shouldUpdate && this._lastEntityState.get(eid) !== hass?.states?.[eid]) {
         shouldUpdate = true;
       }
     }
+    if (hasWildcard && now - this._lastWildcardScanMs > 5000) {
+      shouldUpdate = true;
+      shouldScanWildcards = true;
+    }
 
     if (shouldUpdate) {
-      this.updateEntityMarkers();
+      this.updateEntityMarkers(shouldScanWildcards);
       this.followEntitiesIfConfigured();
     }
   }
@@ -1062,29 +1061,37 @@ export class HaGmapCard extends LitElement {
     }
   }
 
-  private updateEntityMarkers() {
+  private updateEntityMarkers(scanWildcards = true) {
     if (!this._map || !this._google || !this._hass) return;
 
-    this._lastWildcardScanMs = Date.now();
+    if (scanWildcards) {
+      this._lastWildcardScanMs = Date.now();
+    }
     const isDark = this.isDarkMode();
     const activeEntityIds = new Set<string>();
+    const skippedExplicitStates = new Map<string, any>();
     const zoom = typeof this._map.getZoom === "function" ? this._map.getZoom() : 15;
     let membershipChanged = false;
 
     const excludedStates = new Set(this._config.excludeStates.map((s) => s.toLowerCase()));
     const excludeRules = this._config.exclude || [];
-    const allStateKeys = Object.keys(this._hass.states || {});
+    const candidateKeys = scanWildcards
+      ? Object.keys(this._hass.states || {})
+      : Array.from(this._markers.keys());
+    const isPatternStr = (p: string) =>
+      p.includes("*") || p.includes("?") || (p.startsWith("/") && p.lastIndexOf("/") > 0);
+    const matchesRule = (target: string, pattern: string) =>
+      isPatternStr(pattern)
+        ? matchEntityPattern(target, pattern)
+        : target.toLowerCase() === pattern.trim().toLowerCase();
 
     for (const ent of this._config.entities) {
       if (!ent.entityId) continue;
-      const isPattern =
-        ent.entityId.includes("*") ||
-        ent.entityId.includes("?") ||
-        (ent.entityId.startsWith("/") && ent.entityId.lastIndexOf("/") > 0);
+      const isPattern = isPatternStr(ent.entityId);
       const matchedIds = this._hass.states[ent.entityId]
         ? [ent.entityId]
         : isPattern
-          ? allStateKeys.filter((id) => matchEntityPattern(id, ent.entityId))
+          ? candidateKeys.filter((id) => matchEntityPattern(id, ent.entityId))
           : [];
 
       for (const resolvedId of matchedIds) {
@@ -1092,19 +1099,23 @@ export class HaGmapCard extends LitElement {
         const stateObj = this._hass.states[resolvedId];
         if (!stateObj) continue;
         const stateStr = String(stateObj.state ?? "").toLowerCase();
-        if (excludedStates.has(stateStr)) continue;
         const friendlyName = String(stateObj.attributes?.friendly_name || resolvedId);
-        if (
+        const isExcluded =
+          excludedStates.has(stateStr) ||
           excludeRules.some(
             (r) =>
-              (!r.entityId || matchEntityPattern(resolvedId, r.entityId)) &&
-              (!r.state || matchEntityPattern(String(stateObj.state ?? ""), r.state)) &&
+              (!r.entityId || matchesRule(resolvedId, r.entityId)) &&
+              (!r.state || matchesRule(String(stateObj.state ?? ""), r.state)) &&
               (!r.name || matchEntityPattern(friendlyName, r.name))
-          )
-        ) {
+          );
+        if (isExcluded) {
+          if (!isPattern) skippedExplicitStates.set(resolvedId, stateObj);
           continue;
         }
-        if (ent.nameFilter && !matchEntityPattern(friendlyName, ent.nameFilter)) continue;
+        if (ent.nameFilter && !matchEntityPattern(friendlyName, ent.nameFilter)) {
+          if (!isPattern) skippedExplicitStates.set(resolvedId, stateObj);
+          continue;
+        }
         const resolvedEnt = resolvedId === ent.entityId ? ent : { ...ent, entityId: resolvedId };
 
         const lat = Number(stateObj.attributes?.latitude);
@@ -1176,6 +1187,10 @@ export class HaGmapCard extends LitElement {
         this._markerConfigs.delete(eid);
         this._lastEntityState.delete(eid);
       }
+    }
+
+    for (const [eid, st] of skippedExplicitStates) {
+      this._lastEntityState.set(eid, st);
     }
 
     if (this._config.fitEntities && !this._initialFitDone && this._markers.size > 0) {
