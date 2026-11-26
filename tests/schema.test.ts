@@ -268,6 +268,19 @@ describe("Card Config Normalization & Aliasing", () => {
       picturePadding: 4
     });
 
+    const nativeFilterCfg = normalizeCardConfig({
+      api_key: "test",
+      exclude_states: ["unavailable", "unknown"],
+      exclude: [{ entity_id: "sensor.debug_*" }, { state: "off", name: "*Test*" }]
+    });
+    expect(nativeFilterCfg.excludeStates).toEqual(["unavailable", "unknown"]);
+    expect(nativeFilterCfg.exclude).toEqual([
+      { entityId: "sensor.debug_*", state: undefined, name: undefined },
+      { entityId: undefined, state: "off", name: "*Test*" }
+    ]);
+    expect(normalizeCardConfig({ api_key: "test" }).excludeStates).toEqual(["unavailable"]);
+    expect(normalizeCardConfig({ api_key: "test", exclude_states: false }).excludeStates).toEqual([]);
+
     expect(cfg.transitMotion).toMatchObject({
       enabled: true,
       fps: 30,

@@ -177,6 +177,15 @@ export class HaGmapCard extends LitElement {
 
     let shouldUpdate = this._markers.size === 0 && this._config.entities.length > 0;
     if (!shouldUpdate) {
+      // Instant check on already-tracked markers (handles live GPS updates for wildcard-matched buses with 0ms delay)
+      for (const [eid, prev] of this._lastEntityState.entries()) {
+        if (hass?.states?.[eid] !== prev) {
+          shouldUpdate = true;
+          break;
+        }
+      }
+    }
+    if (!shouldUpdate) {
       const now = Date.now();
       let hasWildcard = false;
       for (const ent of this._config.entities) {
@@ -1062,6 +1071,10 @@ export class HaGmapCard extends LitElement {
     const zoom = typeof this._map.getZoom === "function" ? this._map.getZoom() : 15;
     let membershipChanged = false;
 
+    const excludedStates = new Set(this._config.excludeStates.map((s) => s.toLowerCase()));
+    const excludeRules = this._config.exclude || [];
+    const allStateKeys = Object.keys(this._hass.states || {});
+
     for (const ent of this._config.entities) {
       if (!ent.entityId) continue;
       const isPattern =
@@ -1071,16 +1084,27 @@ export class HaGmapCard extends LitElement {
       const matchedIds = this._hass.states[ent.entityId]
         ? [ent.entityId]
         : isPattern
-          ? Object.keys(this._hass.states).filter((id) => matchEntityPattern(id, ent.entityId))
+          ? allStateKeys.filter((id) => matchEntityPattern(id, ent.entityId))
           : [];
 
       for (const resolvedId of matchedIds) {
+        if (activeEntityIds.has(resolvedId)) continue; // First matching rule wins
         const stateObj = this._hass.states[resolvedId];
         if (!stateObj) continue;
-        if (ent.nameFilter) {
-          const friendlyName = String(stateObj.attributes?.friendly_name || resolvedId);
-          if (!matchEntityPattern(friendlyName, ent.nameFilter)) continue;
+        const stateStr = String(stateObj.state ?? "").toLowerCase();
+        if (excludedStates.has(stateStr)) continue;
+        const friendlyName = String(stateObj.attributes?.friendly_name || resolvedId);
+        if (
+          excludeRules.some(
+            (r) =>
+              (!r.entityId || matchEntityPattern(resolvedId, r.entityId)) &&
+              (!r.state || matchEntityPattern(String(stateObj.state ?? ""), r.state)) &&
+              (!r.name || matchEntityPattern(friendlyName, r.name))
+          )
+        ) {
+          continue;
         }
+        if (ent.nameFilter && !matchEntityPattern(friendlyName, ent.nameFilter)) continue;
         const resolvedEnt = resolvedId === ent.entityId ? ent : { ...ent, entityId: resolvedId };
 
         const lat = Number(stateObj.attributes?.latitude);

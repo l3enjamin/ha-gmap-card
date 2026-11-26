@@ -120,6 +120,12 @@ export interface LayerFiltersConfig {
   icon?: string;
 }
 
+export interface EntityExcludeRule {
+  entityId?: string;
+  state?: string;
+  name?: string;
+}
+
 export interface NormalizedCardConfig {
   apiKey: string;
   mapId?: string;
@@ -150,6 +156,8 @@ export interface NormalizedCardConfig {
   geojsonLayers: GeoJsonLayerConfig[];
   transitMotion: TransitMotionConfig;
   entities: CardEntityConfig[];
+  excludeStates: string[];
+  exclude: EntityExcludeRule[];
   raw: any;
 }
 
@@ -439,6 +447,23 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
       };
     });
 
+  const rawExcludeStates = cfg.exclude_states ?? cfg.excludeStates;
+  const excludeStates: string[] = Array.isArray(rawExcludeStates)
+    ? rawExcludeStates.map((s: any) => asString(s)).filter((s): s is string => Boolean(s))
+    : rawExcludeStates === false
+      ? []
+      : ["unavailable"];
+
+  const rawExclude = cfg.exclude ?? cfg.entity_exclude ?? [];
+  const exclude: EntityExcludeRule[] = (Array.isArray(rawExclude) ? rawExclude : [])
+    .filter((r: any) => r && typeof r === "object" && !Array.isArray(r))
+    .map((r: any) => ({
+      entityId: asString(r.entity_id ?? r.entity ?? r.entityId),
+      state: asString(r.state),
+      name: asString(r.name)
+    }))
+    .filter((r) => Boolean(r.entityId || r.state || r.name));
+
   return {
     apiKey,
     mapId,
@@ -469,6 +494,8 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
     geojsonLayers,
     transitMotion,
     entities,
+    excludeStates,
+    exclude,
     raw: cfg
   };
 }
