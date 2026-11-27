@@ -9,6 +9,7 @@ import {
   findActiveScheduledTrips,
   findUpcomingArrivalsForStation,
   interpolateTripPosition,
+  resolveEntityTemplate,
   resolveServiceDaySeconds
 } from "../src/transit/schedule";
 
@@ -209,5 +210,17 @@ describe("Malformed GTFS Schedule & GeoJSON Resilience", () => {
     expect(resolveEntityPicture({ entityId: "camera.drivebc_123" }, camState)).toBe(undefined);
     expect(resolveEntityPicture({ entityId: "camera.drivebc_123", picture: "/local/cctv.svg" }, camState)).toBe("/local/cctv.svg");
     expect(resolveEntityPicture({ entityId: "sensor.chevron_gas" }, { attributes: { entity_picture: "/local/chevron.png" } })).toBe("/local/chevron.png");
+  });
+
+  it("resolves location_entity / status_entity / picture_entity templates via regex and glob capture groups", () => {
+    expect(
+      resolveEntityTemplate("sensor.chevron_123_regular_gas", "/^sensor\\.(.+)_regular_gas$/", "sensor.$1_station_name")
+    ).toBe("sensor.chevron_123_station_name");
+    expect(
+      resolveEntityTemplate("sensor.esso_456_regular_gas", "sensor.*_regular_gas", "sensor.$1_station_name")
+    ).toBe("sensor.esso_456_station_name");
+    expect(
+      resolveEntityTemplate("sensor.esso_456_regular_gas", "sensor.*_regular_gas", "zone.home")
+    ).toBe("zone.home");
   });
 });

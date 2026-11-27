@@ -14,7 +14,8 @@ import {
   extractRouteKeys,
   findUpcomingArrivalsForStation,
   haversineMeters,
-  matchEntityPattern
+  matchEntityPattern,
+  resolveEntityTemplate
 } from "./transit/schedule";
 
 const geoJsonCache = new Map<string, Promise<any>>();
@@ -1063,6 +1064,7 @@ export class HaGmapCard extends LitElement {
 
   private resolveEntityLatLng(
     entityId: string,
+    sourcePattern: string,
     stateObj: any,
     entCfg: CardEntityConfig
   ): { lat: number; lng: number } | null {
@@ -1075,29 +1077,14 @@ export class HaGmapCard extends LitElement {
       return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
     };
 
-    const direct = readCoords(stateObj);
-    if (direct) return direct;
-
     const states = this._hass?.states;
-    if (!states) return null;
-
-    if (entCfg.locationEntity && states[entCfg.locationEntity]) {
-      const explicit = readCoords(states[entCfg.locationEntity]);
+    if (entCfg.locationEntity && states) {
+      const targetId = resolveEntityTemplate(entityId, sourcePattern, entCfg.locationEntity);
+      const explicit = readCoords(states[targetId]);
       if (explicit) return explicit;
     }
 
-    // Sibling fallback for split-sensor integrations like GasBuddy (*_regular_gas -> *_station_name)
-    const m = entityId.match(/^sensor\.(.+?)_(regular_gas|midgrade_gas|premium_gas|diesel|e85|unleaded88|regular|midgrade|premium)$/i);
-    if (m) {
-      const base = m[1];
-      for (const suffix of ["_station_name", "_name", "_location"]) {
-        const sibling = states[`sensor.${base}${suffix}`];
-        const coords = readCoords(sibling);
-        if (coords) return coords;
-      }
-    }
-
-    return null;
+    return readCoords(stateObj);
   }
 
   private updateEntityMarkers(scanWildcards = true) {
@@ -1157,9 +1144,26 @@ export class HaGmapCard extends LitElement {
         }
         const resolvedEnt = resolvedId === ent.entityId ? ent : { ...ent, entityId: resolvedId };
 
-        const coords = this.resolveEntityLatLng(resolvedId, stateObj, resolvedEnt);
+        const coords = this.resolveEntityLatLng(resolvedId, ent.entityId, stateObj, resolvedEnt);
         if (!coords) continue;
         const { lat, lng } = coords;
+
+        let displayStateObj = stateObj;
+        if (resolvedEnt.statusEntity && this._hass?.states) {
+          const statusId = resolveEntityTemplate(resolvedId, ent.entityId, resolvedEnt.statusEntity);
+          if (this._hass.states[statusId]) {
+            displayStateObj = this._hass.states[statusId];
+          }
+        }
+        let markerEnt = resolvedEnt;
+        if (resolvedEnt.pictureEntity && !resolvedEnt.picture && this._hass?.states) {
+          const picId = resolveEntityTemplate(resolvedId, ent.entityId, resolvedEnt.pictureEntity);
+          const picState = this._hass.states[picId];
+          const picUrl = picState?.attributes?.entity_picture || picState?.attributes?.brand_logo;
+          if (typeof picUrl === "string" && picUrl.trim()) {
+            markerEnt = { ...resolvedEnt, picture: picUrl.trim() };
+          }
+        }
 
         activeEntityIds.add(resolvedEnt.entityId);
         this._markerConfigs.set(resolvedEnt.entityId, resolvedEnt);
@@ -1178,9 +1182,9 @@ export class HaGmapCard extends LitElement {
 
         if (!existingMarker) {
           membershipChanged = true;
-          const contentEl = createMarkerElement(resolvedEnt, stateObj, isDark);
+          const contentEl = createMarkerElement(markerEnt, displayStateObj, isDark);
           const position = { lat, lng };
-          const title = resolvedEnt.name || stateObj.attributes?.friendly_name || resolvedEnt.entityId;
+          const title = resolvedEnt.name || displayStateObj.attributes?.friendly_name || resolvedEnt.entityId;
 
           let marker: any;
           if (this._config.mapId && this._google.maps.marker?.AdvancedMarkerElement) {

@@ -386,6 +386,34 @@ export function matchEntityPattern(target: string, pattern: string): boolean {
 }
 
 /**
+ * Resolves a target entity template (e.g. `sensor.$1_station_name`) using capture groups
+ * from a `/regex/` or glob (`*`, `?`) `sourcePattern` matched against `matchedId`.
+ */
+export function resolveEntityTemplate(matchedId: string, sourcePattern: string, template: string): string {
+  if (!template || !template.includes("$")) return template;
+  const pStr = String(sourcePattern || "").trim();
+  let re: RegExp | null = null;
+  if (pStr.startsWith("/") && pStr.lastIndexOf("/") > 0) {
+    const lastSlash = pStr.lastIndexOf("/");
+    try {
+      re = new RegExp(pStr.slice(1, lastSlash), pStr.slice(lastSlash + 1) || "i");
+    } catch (_) {}
+  } else if (pStr.includes("*") || pStr.includes("?")) {
+    const esc = pStr.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "(.*?)").replace(/\?/g, "(.)");
+    try {
+      re = new RegExp("^" + esc + "$", "i");
+    } catch (_) {}
+  }
+  if (!re) return template;
+  const m = matchedId.match(re);
+  if (!m) return template;
+  return template.replace(/\$(\d+)/g, (_, idxStr) => {
+    const idx = Number(idxStr);
+    return m[idx] !== undefined ? m[idx] : "";
+  });
+}
+
+/**
  * Normalizes route lookup keys from a GeoJSON layer's URL, routeKey, or display name.
  */
 export function extractRouteKeys(url?: string, routeKey?: string, name?: string): string[] {

@@ -25,6 +25,8 @@ export interface CardEntityConfig {
   minZoom?: number | null;
   follow?: boolean;
   locationEntity?: string;
+  statusEntity?: string;
+  pictureEntity?: string;
   transitType?: string;
   filterGroup?: string;
   popupTemplate?: string;
@@ -441,6 +443,8 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
         minZoom: parseOptionalNumber(rawMinZoom),
         follow: merged.follow,
         locationEntity: asString(merged.location_entity ?? merged.locationEntity),
+        statusEntity: asString(merged.status_entity ?? merged.statusEntity),
+        pictureEntity: asString(merged.picture_entity ?? merged.pictureEntity ?? merged.image_entity ?? merged.imageEntity),
         transitType: asString(merged.transit_type ?? merged.transitType),
         filterGroup: asString(merged.filter_group ?? merged.filterGroup ?? merged.group),
         popupTemplate: asString(merged.popup_template ?? merged.popupTemplate),
