@@ -1061,6 +1061,45 @@ export class HaGmapCard extends LitElement {
     }
   }
 
+  private resolveEntityLatLng(
+    entityId: string,
+    stateObj: any,
+    entCfg: CardEntityConfig
+  ): { lat: number; lng: number } | null {
+    const readCoords = (st: any) => {
+      const la = st?.attributes?.latitude;
+      const lo = st?.attributes?.longitude;
+      if (la === undefined || la === null || lo === undefined || lo === null) return null;
+      const lat = Number(la);
+      const lng = Number(lo);
+      return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+    };
+
+    const direct = readCoords(stateObj);
+    if (direct) return direct;
+
+    const states = this._hass?.states;
+    if (!states) return null;
+
+    if (entCfg.locationEntity && states[entCfg.locationEntity]) {
+      const explicit = readCoords(states[entCfg.locationEntity]);
+      if (explicit) return explicit;
+    }
+
+    // Sibling fallback for split-sensor integrations like GasBuddy (*_regular_gas -> *_station_name)
+    const m = entityId.match(/^sensor\.(.+?)_(regular_gas|midgrade_gas|premium_gas|diesel|e85|unleaded88|regular|midgrade|premium)$/i);
+    if (m) {
+      const base = m[1];
+      for (const suffix of ["_station_name", "_name", "_location"]) {
+        const sibling = states[`sensor.${base}${suffix}`];
+        const coords = readCoords(sibling);
+        if (coords) return coords;
+      }
+    }
+
+    return null;
+  }
+
   private updateEntityMarkers(scanWildcards = true) {
     if (!this._map || !this._google || !this._hass) return;
 
@@ -1118,9 +1157,9 @@ export class HaGmapCard extends LitElement {
         }
         const resolvedEnt = resolvedId === ent.entityId ? ent : { ...ent, entityId: resolvedId };
 
-        const lat = Number(stateObj.attributes?.latitude);
-        const lng = Number(stateObj.attributes?.longitude);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        const coords = this.resolveEntityLatLng(resolvedId, stateObj, resolvedEnt);
+        if (!coords) continue;
+        const { lat, lng } = coords;
 
         activeEntityIds.add(resolvedEnt.entityId);
         this._markerConfigs.set(resolvedEnt.entityId, resolvedEnt);

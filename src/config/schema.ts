@@ -24,6 +24,7 @@ export interface CardEntityConfig {
   pictureMaxWidth?: number;
   minZoom?: number | null;
   follow?: boolean;
+  locationEntity?: string;
   transitType?: string;
   filterGroup?: string;
   popupTemplate?: string;
@@ -439,6 +440,7 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
         pictureMaxWidth: asFiniteNumber(merged.picture_max_width ?? merged.pictureMaxWidth, undefined, 1, 1024),
         minZoom: parseOptionalNumber(rawMinZoom),
         follow: merged.follow,
+        locationEntity: asString(merged.location_entity ?? merged.locationEntity),
         transitType: asString(merged.transit_type ?? merged.transitType),
         filterGroup: asString(merged.filter_group ?? merged.filterGroup ?? merged.group),
         popupTemplate: asString(merged.popup_template ?? merged.popupTemplate),
