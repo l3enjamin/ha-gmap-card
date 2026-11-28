@@ -5,6 +5,7 @@ import { loadGoogleMaps } from "./maps/loader";
 import { BatchedDomMarkerLayer, createMarkerElement } from "./maps/marker-content";
 import { PopupController } from "./popup/controller";
 import {
+  buildSvgBadgeDataUrl,
   resolveCustomIconUrl,
   resolveCustomSvgBadgeDataUrl,
   resolveMdiIconDataUrl,
@@ -44,7 +45,7 @@ export class HaGmapCard extends LitElement {
   private _markerConfigs = new Map<string, CardEntityConfig>();
   private _lastEntityState = new Map<string, any>();
   private _domMarkerLayer: BatchedDomMarkerLayer | null = null;
-  private _geoLayers = new Map<string, { layer: any; cfg: GeoJsonLayerConfig }>();
+  private _geoLayers = new Map<string, { layer: any; cfg: GeoJsonLayerConfig; loaded: boolean }>();
   private _geoZoomListeners: any[] = [];
   private _geoIconCache = new Map<string, any>();
   private _routePolylines = new Map<string, number[][][]>();
@@ -400,6 +401,10 @@ export class HaGmapCard extends LitElement {
         // Transit motion engine
         if (this._config.transitMotion.enabled) {
           const getEntityConfigs = () => this._config.entities;
+          const getDomMarkerLayer = () => this._domMarkerLayer;
+          const tmGroup = this._config.transitMotion.filterGroup;
+          const tmActive =
+            !tmGroup || !this._filterController ? true : this._filterController.isFilterActive(tmGroup);
           this._transitMotion = new TransitMotionEngine(
             this._google.maps,
             this._map,
@@ -408,20 +413,19 @@ export class HaGmapCard extends LitElement {
               get entityConfigs() {
                 return getEntityConfigs();
               },
+              get domMarkerLayer() {
+                return getDomMarkerLayer();
+              },
               entityMarkers: this._markers,
               routePolylines: this._routePolylines,
               hasMapId: Boolean(this._config.mapId),
+              initialFilterActive: tmActive,
               isEntityFilterActive: (entityId: string) => {
                 const cfg = this._markerConfigs.get(entityId) || this._transitMotion?.getEntityConfig(entityId);
                 return cfg ? this.isEntityFilterActive(cfg) : true;
               }
             }
           );
-
-          const tmGroup = this._config.transitMotion.filterGroup;
-          if (tmGroup && this._filterController) {
-            this._transitMotion.setFilterActive(this._filterController.isFilterActive(tmGroup));
-          }
         }
 
         this.updateEntityMarkers();
@@ -521,14 +525,21 @@ export class HaGmapCard extends LitElement {
       }
     }
 
-    for (const entry of this._geoLayers.values()) {
+    for (const [layerKey, entry] of this._geoLayers.entries()) {
       if (entry.cfg?.filterGroup === filterId) {
         entry.layer.setMap(active ? this._map : null);
+        if (active && !entry.loaded) {
+          this.populateGeoLayer(layerKey, entry);
+        }
       }
     }
 
     if (this._config.transitMotion.filterGroup === filterId && this._transitMotion) {
       this._transitMotion.setFilterActive(active);
+    }
+
+    if (active) {
+      this.updateEntityMarkers(true);
     }
   }
 
@@ -564,6 +575,8 @@ export class HaGmapCard extends LitElement {
         g.image,
         g.pointShape,
         g.pointSize,
+        g.pointWidth,
+        g.pointHeight,
         g.pointColor,
         g.borderColor,
         g.borderWidth,
@@ -670,35 +683,49 @@ export class HaGmapCard extends LitElement {
         });
       }
 
-      this._geoLayers.set(layerKey, { layer: dataLayer, cfg: layerCfg });
+      const entry = { layer: dataLayer, cfg: layerCfg, loaded: false };
+      this._geoLayers.set(layerKey, entry);
 
-      let fetchPromise = geoJsonCache.get(layerCfg.url);
-      if (!fetchPromise) {
-        fetchPromise = fetch(layerCfg.url)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null)
-          .then((data) => {
-            if (!data) geoJsonCache.delete(layerCfg.url);
-            return data;
-          });
-        geoJsonCache.set(layerCfg.url, fetchPromise);
+      if (isActive) {
+        this.populateGeoLayer(layerKey, entry);
       }
-
-      fetchPromise.then((geoData) => {
-        if (!geoData || this._geoLayers.get(layerKey)?.layer !== dataLayer) return;
-        const preparedGeo = this.prepareGeoJsonWithLabels(geoData, layerCfg);
-        dataLayer.addGeoJson(preparedGeo);
-        this.indexGeoJsonPolylines(geoData, layerCfg);
-        if (layerCfg.labelMinZoom !== undefined && typeof this._map?.addListener === "function") {
-          const handle = this._map.addListener("zoom_changed", () => {
-            if (this._geoLayers.get(layerKey)?.layer === dataLayer) {
-              dataLayer.setStyle((feature: any) => this.computeGeoFeatureStyle(dataLayer, feature, layerCfg));
-            }
-          });
-          this._geoZoomListeners.push(handle);
-        }
-      });
     }
+  }
+
+  private populateGeoLayer(
+    layerKey: string,
+    entry: { layer: any; cfg: GeoJsonLayerConfig; loaded: boolean }
+  ) {
+    if (entry.loaded) return;
+    entry.loaded = true;
+    const { layer: dataLayer, cfg: layerCfg } = entry;
+
+    let fetchPromise = geoJsonCache.get(layerCfg.url);
+    if (!fetchPromise) {
+      fetchPromise = fetch(layerCfg.url)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((data) => {
+          if (!data) geoJsonCache.delete(layerCfg.url);
+          return data;
+        });
+      geoJsonCache.set(layerCfg.url, fetchPromise);
+    }
+
+    fetchPromise.then((geoData) => {
+      if (!geoData || this._geoLayers.get(layerKey)?.layer !== dataLayer) return;
+      const preparedGeo = this.prepareGeoJsonWithLabels(geoData, layerCfg);
+      dataLayer.addGeoJson(preparedGeo);
+      this.indexGeoJsonPolylines(geoData, layerCfg);
+      if (layerCfg.labelMinZoom !== undefined && typeof this._map?.addListener === "function") {
+        const handle = this._map.addListener("zoom_changed", () => {
+          if (this._geoLayers.get(layerKey)?.layer === dataLayer) {
+            dataLayer.setStyle((feature: any) => this.computeGeoFeatureStyle(dataLayer, feature, layerCfg));
+          }
+        });
+        this._geoZoomListeners.push(handle);
+      }
+    });
   }
 
   private prepareGeoJsonWithLabels(geoData: any, layerCfg: GeoJsonLayerConfig): any {
@@ -801,7 +828,7 @@ export class HaGmapCard extends LitElement {
       const badgeText = String(badgeProp || layerCfg.label || layerCfg.name || "").trim();
       const badgeColor = String(layerCfg.labelColor || feature.getProperty("color") || sColor || "#007aff");
       const textColor = String(layerCfg.labelTextColor || "#ffffff");
-      const lShape = layerCfg.labelShape || "pill";
+      const lShape = layerCfg.labelShape || "rectangle";
       const h = layerCfg.labelSize ?? 22;
       const lBorderColor = layerCfg.labelBorderColor || "#ffffff";
       const lBorderWidth = layerCfg.labelBorderWidth ?? 1.5;
@@ -817,7 +844,7 @@ export class HaGmapCard extends LitElement {
             ? layerCfg.labelBorderRadius
             : lShape === "circle"
               ? Math.max(w, h) / 2
-              : lShape === "pill"
+              : lShape === "pill" || lShape === "rectangle"
                 ? Math.round(h / 2)
                 : 4;
         const badgeKey = `badge|${badgeText}|${badgeColor}|${textColor}|${lShape}|${w}|${h}|${lBorderColor}|${lBorderWidth}|${rx}`;
@@ -871,9 +898,10 @@ export class HaGmapCard extends LitElement {
     const pad = layerCfg.padding;
     const pShape = layerCfg.pointShape;
     const sz = layerCfg.pointSize ?? (isStation ? layerCfg.stationSize || 18 : layerCfg.stopSize || 14);
-    const badgeW = pShape === "rectangle" ? Math.round(sz * 1.4) : sz;
+    const badgeW = layerCfg.pointWidth ?? (pShape === "rectangle" ? Math.round(sz * 1.4) : sz);
+    const badgeH = layerCfg.pointHeight ?? sz;
     const hasBadgeStyle = Boolean(
-      (pShape && pShape !== "auto" && pShape !== "icon") ||
+      (pShape && pShape !== "auto" && pShape !== "icon" && pShape !== "none") ||
         layerCfg.pointColor ||
         layerCfg.borderColor ||
         layerCfg.borderWidth !== undefined ||
@@ -895,12 +923,14 @@ export class HaGmapCard extends LitElement {
       (layerCfg.icon && layerCfg.icon.startsWith("mdi:") ? layerCfg.icon : undefined) ||
       (legacySpec && legacySpec.startsWith("mdi:") ? legacySpec : undefined);
 
-    if (imageUrl && pShape !== "icon") {
+    if (imageUrl && pShape !== "icon" && pShape !== "none") {
       if (hasBadgeStyle && /\.svg(\?|$)/i.test(imageUrl) && !imageUrl.startsWith("data:")) {
         const badgedUrl = resolveCustomSvgBadgeDataUrl(
           imageUrl,
           {
             size: sz,
+            width: layerCfg.pointWidth,
+            height: layerCfg.pointHeight,
             shape: pShape,
             bgColor: layerCfg.pointColor,
             borderColor: layerCfg.borderColor,
@@ -912,8 +942,8 @@ export class HaGmapCard extends LitElement {
             dataLayer.overrideStyle(feature, {
               icon: {
                 url: asyncUrl,
-                scaledSize: new this._google.maps.Size(badgeW, sz),
-                anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
+                scaledSize: new this._google.maps.Size(badgeW, badgeH),
+                anchor: new this._google.maps.Point(badgeW / 2, badgeH / 2)
               }
             });
           }
@@ -922,21 +952,35 @@ export class HaGmapCard extends LitElement {
           return {
             icon: {
               url: badgedUrl,
-              scaledSize: new this._google.maps.Size(badgeW, sz),
-              anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
+              scaledSize: new this._google.maps.Size(badgeW, badgeH),
+              anchor: new this._google.maps.Point(badgeW / 2, badgeH / 2)
             },
             title,
             clickable
           };
         }
       }
-      const imgKey = `geo_img|${imageUrl}|${sz}`;
+      const imgKey = `geo_img|${imageUrl}|${badgeW}x${badgeH}`;
       let imgIcon = this._geoIconCache.get(imgKey);
       if (!imgIcon) {
         imgIcon = {
           url: imageUrl,
-          scaledSize: new this._google.maps.Size(sz, sz),
-          anchor: new this._google.maps.Point(sz / 2, sz / 2)
+          scaledSize: new this._google.maps.Size(badgeW, badgeH),
+          anchor: new this._google.maps.Point(badgeW / 2, badgeH / 2)
+        };
+        this._geoIconCache.set(imgKey, imgIcon);
+      }
+      return { icon: imgIcon, title, clickable };
+    }
+
+    if (imageUrl) {
+      const imgKey = `geo_img|${imageUrl}|${badgeW}x${badgeH}`;
+      let imgIcon = this._geoIconCache.get(imgKey);
+      if (!imgIcon) {
+        imgIcon = {
+          url: imageUrl,
+          scaledSize: new this._google.maps.Size(badgeW, badgeH),
+          anchor: new this._google.maps.Point(badgeW / 2, badgeH / 2)
         };
         this._geoIconCache.set(imgKey, imgIcon);
       }
@@ -948,6 +992,8 @@ export class HaGmapCard extends LitElement {
         mdiSpec,
         {
           size: sz,
+          width: layerCfg.pointWidth,
+          height: layerCfg.pointHeight,
           shape: pShape,
           bgColor: pColor,
           fgColor: "#ffffff",
@@ -955,14 +1001,14 @@ export class HaGmapCard extends LitElement {
           borderWidth: layerCfg.borderWidth,
           borderRadius: bRadius,
           padding: pad,
-          badge: pShape !== "icon"
+          badge: pShape !== "icon" && pShape !== "none"
         },
         (asyncUrl) => {
           dataLayer.overrideStyle(feature, {
             icon: {
               url: asyncUrl,
-              scaledSize: new this._google.maps.Size(badgeW, sz),
-              anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
+              scaledSize: new this._google.maps.Size(badgeW, badgeH),
+              anchor: new this._google.maps.Point(badgeW / 2, badgeH / 2)
             }
           });
         }
@@ -971,8 +1017,8 @@ export class HaGmapCard extends LitElement {
         return {
           icon: {
             url: cached,
-            scaledSize: new this._google.maps.Size(badgeW, sz),
-            anchor: new this._google.maps.Point(badgeW / 2, sz / 2)
+            scaledSize: new this._google.maps.Size(badgeW, badgeH),
+            anchor: new this._google.maps.Point(badgeW / 2, badgeH / 2)
           },
           title,
           clickable
@@ -980,29 +1026,39 @@ export class HaGmapCard extends LitElement {
       }
     }
 
-    if (pShape === "square" || pShape === "rectangle") {
-      const w = pShape === "rectangle" ? Math.round(sz * 1.4) : sz;
-      const h = sz;
-      const shapeKey = `geo_shape|${pShape}|${w}|${h}|${pColor}|${bColor}|${bWidth}`;
+    if (
+      pShape === "circle" ||
+      pShape === "square" ||
+      pShape === "rectangle" ||
+      pShape === "triangle" ||
+      pShape === "arrow"
+    ) {
+      const shapeKey = `geo_shape|${pShape}|${badgeW}|${badgeH}|${pColor}|${bColor}|${bWidth}|${bRadius ?? ""}`;
       let shapeIcon = this._geoIconCache.get(shapeKey);
       if (!shapeIcon) {
-        const safePColor = escapeHtml(String(pColor));
-        const safeBColor = escapeHtml(String(bColor));
-        const svg =
-          `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>` +
-          `<rect x='1' y='1' width='${w - 2}' height='${h - 2}' rx='3' fill='${safePColor}' stroke='${safeBColor}' stroke-width='${bWidth}'/>` +
-          `</svg>`;
+        const svgUrl = buildSvgBadgeDataUrl("", "0 0 24 24", {
+          size: sz,
+          width: layerCfg.pointWidth,
+          height: layerCfg.pointHeight,
+          shape: pShape,
+          bgColor: String(pColor),
+          defaultBg: String(pColor),
+          borderColor: String(bColor),
+          borderWidth: bWidth,
+          borderRadius: bRadius,
+          padding: pad
+        });
         shapeIcon = {
-          url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
-          scaledSize: new this._google.maps.Size(w, h),
-          anchor: new this._google.maps.Point(w / 2, h / 2)
+          url: svgUrl,
+          scaledSize: new this._google.maps.Size(badgeW, badgeH),
+          anchor: new this._google.maps.Point(badgeW / 2, badgeH / 2)
         };
         this._geoIconCache.set(shapeKey, shapeIcon);
       }
       return { icon: shapeIcon, title, clickable };
     }
 
-    if (isStation && pShape !== "circle") {
+    if (isStation && pShape !== "none") {
       const cacheKey = `station_t|${pColor}|${sz}`;
       let iconObj = this._geoIconCache.get(cacheKey);
       if (!iconObj) {
@@ -1173,7 +1229,6 @@ export class HaGmapCard extends LitElement {
         if (existingMarker && prevState === stateObj) {
           continue;
         }
-        this._lastEntityState.set(resolvedEnt.entityId, stateObj);
 
         const minZ = this._transitMotion?.getEntityMinZoom(resolvedEnt.entityId) ?? resolvedEnt.minZoom ?? null;
         const zoomOk = minZ === null ? true : zoom >= minZ;
@@ -1181,6 +1236,11 @@ export class HaGmapCard extends LitElement {
         const shouldShow = filterOk && zoomOk;
 
         if (!existingMarker) {
+          if (!filterOk) {
+            if (!isPattern) skippedExplicitStates.set(resolvedEnt.entityId, stateObj);
+            continue;
+          }
+          this._lastEntityState.set(resolvedEnt.entityId, stateObj);
           membershipChanged = true;
           const contentEl = createMarkerElement(markerEnt, displayStateObj, isDark);
           const position = { lat, lng };

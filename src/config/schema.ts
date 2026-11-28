@@ -1,6 +1,6 @@
-export type MarkerShapeType = "circle" | "icon" | "picture" | "rectangle" | "square" | "triangle" | "arrow" | "auto";
+export type MarkerShapeType = "none" | "circle" | "square" | "rectangle" | "triangle" | "arrow" | "auto" | "icon" | "picture";
 export type PictureShapeType = "circle" | "rectangle" | "auto";
-export type RouteLabelShapeType = "pill" | "rectangle" | "square" | "circle";
+export type RouteLabelShapeType = "rectangle" | "square" | "circle" | "pill";
 
 export interface CardEntityConfig {
   entityId: string;
@@ -14,6 +14,8 @@ export interface CardEntityConfig {
   markerType?: MarkerShapeType;
   pictureShape?: PictureShapeType;
   iconSize?: number;
+  width?: number;
+  height?: number;
   backgroundColor?: string;
   borderColor?: string;
   borderWidth?: number;
@@ -43,6 +45,8 @@ export interface GeoJsonLayerConfig {
   image?: string;
   pointShape?: MarkerShapeType;
   pointSize?: number;
+  pointWidth?: number;
+  pointHeight?: number;
   pointColor?: string;
   borderColor?: string;
   borderWidth?: number;
@@ -77,6 +81,8 @@ export interface FilterGroupConfig {
   color?: string;
   default?: boolean;
   position?: string;
+  activeFrom?: string;
+  activeUntil?: string;
 }
 
 export interface TransitRouteConfig {
@@ -84,8 +90,11 @@ export interface TransitRouteConfig {
   name?: string;
   icon?: string;
   image?: string;
+  showIcon?: boolean;
   color?: string;
   iconSize?: number;
+  width?: number;
+  height?: number;
   shape?: MarkerShapeType;
   backgroundColor?: string;
   borderColor?: string;
@@ -106,6 +115,9 @@ export interface TransitMotionConfig {
   filterGroup?: string;
   simulate247: boolean;
   vehicleShape?: MarkerShapeType;
+  vehicleWidth?: number;
+  vehicleHeight?: number;
+  vehicleShowIcon?: boolean;
   vehicleBackgroundColor?: string;
   vehicleBorderColor?: string;
   vehicleBorderWidth?: number;
@@ -156,8 +168,10 @@ export interface NormalizedCardConfig {
   showScale: boolean;
   layerFilters: LayerFiltersConfig;
   filterGroups: Record<string, FilterGroupConfig>;
+  geojsonDefaults: Record<string, any>;
   geojsonLayers: GeoJsonLayerConfig[];
   transitMotion: TransitMotionConfig;
+  entityDefaults: Record<string, any>;
   entities: CardEntityConfig[];
   excludeStates: string[];
   exclude: EntityExcludeRule[];
@@ -270,7 +284,9 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
           icon: item.icon,
           color: item.color || item.accent_color,
           default: defaultVal,
-          position: item.position || layerFilters.position
+          position: item.position || layerFilters.position,
+          activeFrom: asString(item.active_from ?? item.activeFrom),
+          activeUntil: asString(item.active_until ?? item.activeUntil)
         };
       }
     }
@@ -289,17 +305,21 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
           icon: obj.icon,
           color: obj.color || obj.accent_color,
           default: defaultVal,
-          position: obj.position || layerFilters.position
+          position: obj.position || layerFilters.position,
+          activeFrom: asString(obj.active_from ?? obj.activeFrom),
+          activeUntil: asString(obj.active_until ?? obj.activeUntil)
         };
       }
     }
   }
 
   const rlDefaults = asRecord(cfg.route_labels ?? cfg.routeLabels);
+  const geojsonDefaults = asRecord(cfg.geojson_defaults ?? cfg.geojsonDefaults);
   const geoRaw = cfg.geojson_layers || cfg.geojsonLayers || [];
   const geojsonLayers: GeoJsonLayerConfig[] = (Array.isArray(geoRaw) ? geoRaw : [])
     .filter((l: any) => l && typeof l === "object" && !Array.isArray(l))
-    .map((l: any) => {
+    .map((rawLayer: any) => {
+      const l = { ...geojsonDefaults, ...rawLayer };
       const rawPointSize = l.point_size ?? l.pointSize ?? l.icon_size ?? l.iconSize ?? l.size;
       const pointSize = asFiniteNumber(rawPointSize, undefined, 1, 512);
       return {
@@ -311,6 +331,8 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
         image: asString(l.image ?? l.picture),
         pointShape: asString(l.point_shape ?? l.pointShape ?? l.marker_type ?? l.markerType ?? l.shape) as any,
         pointSize,
+        pointWidth: asFiniteNumber(l.point_width ?? l.pointWidth, undefined, 1, 512),
+        pointHeight: asFiniteNumber(l.point_height ?? l.pointHeight, undefined, 1, 512),
         pointColor: asString(l.point_color ?? l.pointColor ?? l.background_color ?? l.backgroundColor),
         borderColor: asString(l.border_color ?? l.borderColor),
         borderWidth: asFiniteNumber(l.border_width ?? l.borderWidth, undefined, 0, 64),
@@ -321,7 +343,7 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
         stationSize: asFiniteNumber(l.station_size ?? l.station_icon_size ?? rawPointSize, 18, 1, 512) ?? 18,
         stopSize: asFiniteNumber(l.stop_size ?? l.stop_icon_size ?? rawPointSize, 14, 1, 512) ?? 14,
         strokeColor: asString(l.stroke_color ?? l.strokeColor ?? l.color, "#007aff") || "#007aff",
-        strokeWidth: asFiniteNumber(l.stroke_width ?? l.strokeWidth ?? l.width, 3, 0, 64) ?? 3,
+        strokeWidth: asFiniteNumber(l.stroke_width ?? l.strokeWidth ?? l.stroke_px ?? l.width, 3, 0, 64) ?? 3,
         fillColor: asString(l.fill_color ?? l.fillColor),
         fillOpacity: asFiniteNumber(l.fill_opacity ?? l.fillOpacity, undefined, 0, 1),
         showPopup: l.show_popup ?? l.showPopup ?? true,
@@ -370,8 +392,11 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
           name: asString(r.name ?? r.label),
           icon: asString(r.icon),
           image: asString(r.image ?? r.picture),
+          showIcon: r.show_icon !== undefined ? Boolean(r.show_icon) : (r.showIcon !== undefined ? Boolean(r.showIcon) : undefined),
           color: asString(r.color ?? r.icon_color),
           iconSize: asFiniteNumber(rawSz, undefined, 4, 256),
+          width: asFiniteNumber(r.width, undefined, 4, 256),
+          height: asFiniteNumber(r.height, undefined, 4, 256),
           shape: asString(r.shape ?? r.marker_type ?? r.markerType ?? r.point_shape ?? r.pointShape) as any,
           backgroundColor: asString(r.background_color ?? r.backgroundColor ?? r.point_color ?? r.pointColor),
           borderColor: asString(r.border_color ?? r.borderColor),
@@ -395,6 +420,9 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
     filterGroup: asString(tmObj.filter_group ?? tmObj.filterGroup ?? tmObj.group, "vehicles"),
     simulate247: Boolean(tmObj.simulate_24_7 ?? tmObj.simulate247 ?? false),
     vehicleShape: asString(tmObj.vehicle_shape ?? tmObj.vehicleShape ?? tmObj.marker_type ?? tmObj.markerType ?? tmObj.shape) as any,
+    vehicleWidth: asFiniteNumber(tmObj.vehicle_width ?? tmObj.vehicleWidth ?? tmObj.width, undefined, 4, 256),
+    vehicleHeight: asFiniteNumber(tmObj.vehicle_height ?? tmObj.vehicleHeight ?? tmObj.height, undefined, 4, 256),
+    vehicleShowIcon: tmObj.show_icon !== undefined ? Boolean(tmObj.show_icon) : (tmObj.showIcon !== undefined ? Boolean(tmObj.showIcon) : undefined),
     vehicleBackgroundColor: asString(tmObj.vehicle_background_color ?? tmObj.vehicleBackgroundColor ?? tmObj.background_color ?? tmObj.backgroundColor),
     vehicleBorderColor: asString(tmObj.vehicle_border_color ?? tmObj.vehicleBorderColor ?? tmObj.border_color ?? tmObj.borderColor),
     vehicleBorderWidth: asFiniteNumber(tmObj.vehicle_border_width ?? tmObj.vehicleBorderWidth ?? tmObj.border_width ?? tmObj.borderWidth, undefined, 0, 32),
@@ -405,22 +433,44 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
     routes
   };
 
+  const entityDefaults = asRecord(cfg.entity_defaults ?? cfg.entityDefaults);
   const entRaw = cfg.entities || [];
   const entities: CardEntityConfig[] = (Array.isArray(entRaw) ? entRaw : [])
     .filter((e: any) => (typeof e === "string" && e.trim().length > 0) || (e && typeof e === "object" && !Array.isArray(e)))
     .map((e: any) => {
       if (typeof e === "string") {
-        return { entityId: e };
+        const mergedStr: Record<string, any> = { ...entityDefaults, entity: e };
+        return {
+          entityId: e,
+          name: asString(mergedStr.name),
+          showName: mergedStr.show_name ?? mergedStr.showName,
+          icon: asString(mergedStr.icon),
+          showIcon: mergedStr.show_icon ?? mergedStr.showIcon,
+          picture: asString(mergedStr.picture),
+          markerType: asString(mergedStr.marker_type ?? mergedStr.markerType ?? mergedStr.shape) as any,
+          pictureShape: asString(mergedStr.picture_shape ?? mergedStr.pictureShape) as any,
+          iconSize: asFiniteNumber(mergedStr.icon_size ?? mergedStr.iconSize, undefined, 1, 512),
+          width: asFiniteNumber(mergedStr.width, undefined, 1, 512),
+          height: asFiniteNumber(mergedStr.height, undefined, 1, 512),
+          backgroundColor: asString(mergedStr.background_color ?? mergedStr.backgroundColor),
+          borderColor: asString(mergedStr.border_color ?? mergedStr.borderColor),
+          borderWidth: asFiniteNumber(mergedStr.border_width ?? mergedStr.borderWidth, undefined, 0, 64),
+          pictureBorderRadius: asFiniteNumber(mergedStr.picture_border_radius ?? mergedStr.border_radius, undefined, 0, 256),
+          picturePadding: asFiniteNumber(mergedStr.picture_padding ?? mergedStr.padding, undefined, 0, 128),
+          minZoom: parseOptionalNumber(mergedStr.min_zoom ?? mergedStr.minZoom),
+          filterGroup: asString(mergedStr.filter_group ?? mergedStr.filterGroup ?? mergedStr.group)
+        };
       }
       const hasNestedOptions = Boolean(e && typeof e.options === "object" && e.options !== null && !Array.isArray(e.options));
-      const merged = hasNestedOptions ? { ...e, ...e.options } : e;
+      const baseEnt = hasNestedOptions ? { ...e, ...e.options } : e;
+      const merged = { ...entityDefaults, ...baseEnt };
       const rawMinZoom = merged.min_zoom ?? merged.minZoom;
       const pictureBorderWidth = asFiniteNumber(merged.picture_border_width ?? merged.pictureBorderWidth, undefined, 0, 64);
       const borderWidth = asFiniteNumber(merged.border_width ?? merged.borderWidth, pictureBorderWidth, 0, 64);
 
       return {
         entityId: asString(merged.entity ?? merged.entity_id ?? merged.entityId, "") || "",
-        name: hasNestedOptions ? asString(e.options.name) : asString(merged.name),
+        name: hasNestedOptions ? asString(e.options.name ?? entityDefaults.name) : asString(merged.name),
         nameFilter: hasNestedOptions
           ? (typeof e.name === "string" && e.name ? e.name : asString(merged.name_filter ?? merged.nameFilter))
           : asString(merged.name_filter ?? merged.nameFilter),
@@ -432,6 +482,8 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
         markerType: asString(merged.marker_type ?? merged.markerType ?? merged.shape) as any,
         pictureShape: asString(merged.picture_shape ?? merged.pictureShape ?? merged.picture_aspect ?? merged.pictureAspect) as any,
         iconSize: asFiniteNumber(merged.icon_size ?? merged.iconSize, undefined, 1, 512),
+        width: asFiniteNumber(merged.width, undefined, 1, 512),
+        height: asFiniteNumber(merged.height, undefined, 1, 512),
         backgroundColor: asString(merged.background_color ?? merged.backgroundColor ?? merged.card_background),
         borderColor: asString(merged.border_color ?? merged.borderColor),
         borderWidth,
@@ -499,8 +551,10 @@ export function normalizeCardConfig(raw: any): NormalizedCardConfig {
     showScale,
     layerFilters,
     filterGroups,
+    geojsonDefaults,
     geojsonLayers,
     transitMotion,
+    entityDefaults,
     entities,
     excludeStates,
     exclude,

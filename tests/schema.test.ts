@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { normalizeCardConfig } from "../src/config/schema";
+import { isTimeInWindow } from "../src/filters/controller";
 
 describe("Card Config Normalization & Aliasing", () => {
   it("normalizes basic config with sensible defaults", () => {
@@ -329,5 +330,102 @@ describe("Card Config Normalization & Aliasing", () => {
       follow: false,
       transitType: "deal"
     });
+  });
+
+  it("merges entity_defaults, geojson_defaults, and time-windowed filter_groups", () => {
+    const cfg = normalizeCardConfig({
+      api_key: "test",
+      entity_defaults: {
+        filter_group: "default_grp",
+        show_icon: false,
+        marker_type: "rectangle",
+        width: 30,
+        height: 18,
+        background_color: "#222222"
+      },
+      entities: [
+        "zone.home",
+        {
+          entity_id: "person.alex",
+          width: 44,
+          show_icon: true
+        }
+      ],
+      geojson_defaults: {
+        stroke_color: "#444444",
+        point_shape: "triangle",
+        point_width: 24,
+        point_height: 20,
+        label_shape: "rectangle"
+      },
+      geojson_layers: [
+        { url: "/local/a.geojson", width: 5 },
+        { url: "/local/b.geojson", stroke_color: "#ff0000", point_width: 32 }
+      ],
+      filter_groups: {
+        nbus: { name: "NightBus", active_from: "23:30", active_until: "05:30" },
+        live: { name: "Live", active_from: "05:00", active_until: "01:45" }
+      }
+    });
+
+    expect(cfg.entities[0]).toMatchObject({
+      entityId: "zone.home",
+      filterGroup: "default_grp",
+      showIcon: false,
+      markerType: "rectangle",
+      width: 30,
+      height: 18,
+      backgroundColor: "#222222"
+    });
+    expect(cfg.entities[1]).toMatchObject({
+      entityId: "person.alex",
+      filterGroup: "default_grp",
+      showIcon: true,
+      markerType: "rectangle",
+      width: 44,
+      height: 18
+    });
+
+    expect(cfg.geojsonLayers[0]).toMatchObject({
+      url: "/local/a.geojson",
+      strokeColor: "#444444",
+      strokeWidth: 5,
+      pointShape: "triangle",
+      pointWidth: 24,
+      pointHeight: 20,
+      labelShape: "rectangle"
+    });
+    expect(cfg.geojsonLayers[1]).toMatchObject({
+      url: "/local/b.geojson",
+      strokeColor: "#ff0000",
+      pointShape: "triangle",
+      pointWidth: 32,
+      pointHeight: 20,
+      labelShape: "rectangle"
+    });
+
+    expect(cfg.filterGroups.nbus).toMatchObject({ activeFrom: "23:30", activeUntil: "05:30" });
+    expect(cfg.filterGroups.live).toMatchObject({ activeFrom: "05:00", activeUntil: "01:45" });
+
+    // Daytime window [09:00, 17:00)
+    expect(isTimeInWindow(new Date(2026, 10, 27, 9, 0), "09:00", "17:00")).toBe(true);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 16, 59), "09:00", "17:00")).toBe(true);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 17, 0), "09:00", "17:00")).toBe(false);
+
+    // Overnight wrap window nbus [23:30, 05:30)
+    expect(isTimeInWindow(new Date(2026, 10, 27, 23, 30), "23:30", "05:30")).toBe(true);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 2, 15), "23:30", "05:30")).toBe(true);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 5, 30), "23:30", "05:30")).toBe(false);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 14, 0), "23:30", "05:30")).toBe(false);
+
+    // Overnight wrap window live [05:00, 01:45)
+    expect(isTimeInWindow(new Date(2026, 10, 27, 22, 0), "05:00", "01:45")).toBe(true);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 1, 30), "05:00", "01:45")).toBe(true);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 2, 0), "05:00", "01:45")).toBe(false);
+    expect(isTimeInWindow(new Date(2026, 10, 27, 4, 59), "05:00", "01:45")).toBe(false);
+
+    // Unset / invalid
+    expect(isTimeInWindow(new Date(2026, 10, 27, 12, 0), undefined, undefined)).toBeNull();
+    expect(isTimeInWindow(new Date(2026, 10, 27, 12, 0), "99:99", "bad")).toBeNull();
   });
 });

@@ -63,7 +63,7 @@ const PICTURE_SHAPE_OPTIONS = [
   ...PICTURE_SHAPES.map((s) => ({ value: s, label: s }))
 ];
 const LABEL_SHAPE_OPTIONS = [
-  { value: "", label: "Default (pill)" },
+  { value: "", label: "Default (rectangle)" },
   ...ROUTE_LABEL_SHAPES.map((s) => ({ value: s, label: s }))
 ];
 const TRANSIT_TYPE_OPTIONS = [
@@ -133,13 +133,27 @@ export class HaGmapCardEditor extends LitElement {
     this.emitConfig(cleanFieldUpdate(this._config, key, value, removeAliases));
   }
 
-  private updateNestedSection(sectionKey: string, fieldKey: string, value: any, removeAliases?: string[]) {
-    const curSection =
-      this._config[sectionKey] && typeof this._config[sectionKey] === "object" && !Array.isArray(this._config[sectionKey])
-        ? this._config[sectionKey]
-        : {};
+  private getSectionObject(sectionKey: string, alias?: string): Record<string, any> {
+    const primary = this._config[sectionKey];
+    if (primary && typeof primary === "object" && !Array.isArray(primary)) return primary;
+    if (alias) {
+      const alt = this._config[alias];
+      if (alt && typeof alt === "object" && !Array.isArray(alt)) return alt;
+    }
+    return {};
+  }
+
+  private updateNestedSection(
+    sectionKey: string,
+    fieldKey: string,
+    value: any,
+    removeAliases?: string[],
+    sectionAlias?: string
+  ) {
+    const curSection = this.getSectionObject(sectionKey, sectionAlias);
     const nextSection = cleanFieldUpdate(curSection, fieldKey, value, removeAliases);
     const next = { ...this._config };
+    if (sectionAlias) delete next[sectionAlias];
     if (Object.keys(nextSection).length === 0) {
       delete next[sectionKey];
     } else {
@@ -587,6 +601,144 @@ export class HaGmapCardEditor extends LitElement {
     this.updateTopField("entities", arrayUpdate(this.getEntitiesArray(), index, nextEntity));
   }
 
+  private renderEntityStyleFields(
+    ent: Record<string, any>,
+    patch: (key: string, val: any, aliases?: string[]) => void,
+    isDefaults = false
+  ): TemplateResult {
+    return html`
+      <div class="grid">
+        ${isDefaults
+          ? html`
+              ${renderTextField({
+                label: "Default Filter Group ID",
+                value: ent.filter_group ?? ent.filterGroup ?? ent.group,
+                listId: "ha-gmap-filter-groups",
+                onChange: (v) => patch("filter_group", v, ["filterGroup", "group"])
+              })}
+              ${renderNumberField({
+                label: "Default Min Zoom",
+                value: ent.min_zoom ?? ent.minZoom,
+                min: 0,
+                max: 24,
+                onChange: (v) => patch("min_zoom", v, ["minZoom"])
+              })}
+              ${renderTriBoolField({
+                label: "Show Name",
+                value: ent.show_name ?? ent.showName,
+                onChange: (v) => patch("show_name", v, ["showName"])
+              })}
+              ${renderTriBoolField({
+                label: "Show Icon",
+                value: ent.show_icon ?? ent.showIcon,
+                onChange: (v) => patch("show_icon", v, ["showIcon"])
+              })}
+            `
+          : nothing}
+        ${renderTextField({
+          label: "Icon (mdi:... or cli:...)",
+          value: ent.icon,
+          placeholder: "mdi:bus or cli:translink-canada",
+          onChange: (v) => patch("icon", v)
+        })}
+        ${!isDefaults
+          ? renderTextField({
+              label: "Picture URL Override",
+              value: ent.picture,
+              placeholder: "/local/luxe.svg",
+              onChange: (v) => patch("picture", v)
+            })
+          : nothing}
+        ${renderTextField({
+          label: "Picture Attribute Dot-Path",
+          value: ent.picture_attribute ?? ent.pictureAttribute,
+          placeholder: "deals.0.image_url",
+          onChange: (v) => patch("picture_attribute", v, ["pictureAttribute"])
+        })}
+        ${renderSelectField({
+          label: "Marker Shape (marker_type)",
+          value: ent.marker_type ?? ent.markerType ?? ent.shape ?? "",
+          options: MARKER_SHAPE_OPTIONS,
+          onChange: (v) => patch("marker_type", v, ["markerType", "shape"])
+        })}
+        ${renderSelectField({
+          label: "Picture Aspect (picture_shape)",
+          value: ent.picture_shape ?? ent.pictureShape ?? ent.picture_aspect ?? "",
+          options: PICTURE_SHAPE_OPTIONS,
+          onChange: (v) => patch("picture_shape", v, ["pictureShape", "picture_aspect", "pictureAspect"])
+        })}
+        ${renderNumberField({
+          label: "Icon / Marker Size (px)",
+          value: ent.icon_size ?? ent.iconSize,
+          min: 1,
+          max: 512,
+          onChange: (v) => patch("icon_size", v, ["iconSize"])
+        })}
+        ${renderNumberField({
+          label: "Width (px)",
+          value: ent.width,
+          min: 1,
+          max: 512,
+          onChange: (v) => patch("width", v)
+        })}
+        ${renderNumberField({
+          label: "Height (px)",
+          value: ent.height,
+          min: 1,
+          max: 512,
+          onChange: (v) => patch("height", v)
+        })}
+        ${renderColorField({
+          label: "Background Color",
+          value: ent.background_color ?? ent.backgroundColor ?? ent.card_background,
+          placeholder: "#ffffff",
+          onChange: (v) => patch("background_color", v, ["backgroundColor", "card_background"])
+        })}
+        ${renderColorField({
+          label: "Border Color",
+          value: ent.border_color ?? ent.borderColor,
+          placeholder: "#ffffff",
+          onChange: (v) => patch("border_color", v, ["borderColor"])
+        })}
+        ${renderNumberField({
+          label: "Border Width (px)",
+          value: ent.border_width ?? ent.borderWidth ?? ent.picture_border_width,
+          min: 0,
+          max: 64,
+          onChange: (v) => patch("border_width", v, ["borderWidth", "picture_border_width", "pictureBorderWidth"])
+        })}
+        ${renderNumberField({
+          label: "Border Radius (px)",
+          value: ent.border_radius ?? ent.picture_border_radius ?? ent.pictureBorderRadius,
+          min: 0,
+          max: 256,
+          onChange: (v) => patch("border_radius", v, ["borderRadius", "picture_border_radius", "pictureBorderRadius"])
+        })}
+        ${renderNumberField({
+          label: "Padding (px)",
+          value: ent.padding ?? ent.picture_padding ?? ent.picturePadding,
+          min: 0,
+          max: 128,
+          onChange: (v) => patch("padding", v, ["picture_padding", "picturePadding"])
+        })}
+        ${renderNumberField({
+          label: "Picture Height (px, auto/rect)",
+          value: ent.picture_height ?? ent.pictureHeight,
+          min: 1,
+          max: 512,
+          onChange: (v) => patch("picture_height", v, ["pictureHeight"])
+        })}
+        ${renderNumberField({
+          label: "Picture Max Width (px)",
+          value: ent.picture_max_width ?? ent.pictureMaxWidth,
+          min: 1,
+          max: 1024,
+          onChange: (v) => patch("picture_max_width", v, ["pictureMaxWidth"])
+        })}
+      </div>
+    `;
+  }
+
   private renderEntitiesMaster(): TemplateResult {
     const rawExcludeStates = this._config.exclude_states ?? this._config.excludeStates;
     const isExcludeDisabled = rawExcludeStates === false;
@@ -689,6 +841,17 @@ export class HaGmapCardEditor extends LitElement {
               </div>
             `
           : nothing}
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Default Entity Settings (Fallback)</span>
+        </div>
+        ${this.renderEntityStyleFields(
+          this.getSectionObject("entity_defaults", "entityDefaults"),
+          (key, val, aliases) => this.updateNestedSection("entity_defaults", key, val, aliases, "entityDefaults"),
+          true
+        )}
       </div>
 
       <div class="section">
@@ -918,92 +1081,7 @@ export class HaGmapCardEditor extends LitElement {
         <div class="section-header">
           <span class="section-title">Marker, Icon & Picture Styling</span>
         </div>
-        <div class="grid">
-          ${renderTextField({
-            label: "Icon (mdi:... or cli:...)",
-            value: ent.icon,
-            placeholder: "mdi:bus or cli:translink-canada",
-            onChange: (v) => patch("icon", v)
-          })}
-          ${renderTextField({
-            label: "Picture URL Override",
-            value: ent.picture,
-            placeholder: "/local/luxe.svg",
-            onChange: (v) => patch("picture", v)
-          })}
-          ${renderTextField({
-            label: "Picture Attribute Dot-Path",
-            value: ent.picture_attribute ?? ent.pictureAttribute,
-            placeholder: "deals.0.image_url",
-            onChange: (v) => patch("picture_attribute", v, ["pictureAttribute"])
-          })}
-          ${renderSelectField({
-            label: "Marker Shape (marker_type)",
-            value: ent.marker_type ?? ent.markerType ?? ent.shape ?? "",
-            options: MARKER_SHAPE_OPTIONS,
-            onChange: (v) => patch("marker_type", v, ["markerType", "shape"])
-          })}
-          ${renderSelectField({
-            label: "Picture Aspect (picture_shape)",
-            value: ent.picture_shape ?? ent.pictureShape ?? ent.picture_aspect ?? "",
-            options: PICTURE_SHAPE_OPTIONS,
-            onChange: (v) => patch("picture_shape", v, ["pictureShape", "picture_aspect", "pictureAspect"])
-          })}
-          ${renderNumberField({
-            label: "Icon / Marker Size (px)",
-            value: ent.icon_size ?? ent.iconSize,
-            min: 1,
-            max: 512,
-            onChange: (v) => patch("icon_size", v, ["iconSize"])
-          })}
-          ${renderColorField({
-            label: "Background Color",
-            value: ent.background_color ?? ent.backgroundColor ?? ent.card_background,
-            placeholder: "#ffffff",
-            onChange: (v) => patch("background_color", v, ["backgroundColor", "card_background"])
-          })}
-          ${renderColorField({
-            label: "Border Color",
-            value: ent.border_color ?? ent.borderColor,
-            placeholder: "#ffffff",
-            onChange: (v) => patch("border_color", v, ["borderColor"])
-          })}
-          ${renderNumberField({
-            label: "Border Width (px)",
-            value: ent.border_width ?? ent.borderWidth ?? ent.picture_border_width,
-            min: 0,
-            max: 64,
-            onChange: (v) => patch("border_width", v, ["borderWidth", "picture_border_width", "pictureBorderWidth"])
-          })}
-          ${renderNumberField({
-            label: "Border Radius (px)",
-            value: ent.border_radius ?? ent.picture_border_radius ?? ent.pictureBorderRadius,
-            min: 0,
-            max: 256,
-            onChange: (v) => patch("border_radius", v, ["borderRadius", "picture_border_radius", "pictureBorderRadius"])
-          })}
-          ${renderNumberField({
-            label: "Padding (px)",
-            value: ent.padding ?? ent.picture_padding ?? ent.picturePadding,
-            min: 0,
-            max: 128,
-            onChange: (v) => patch("padding", v, ["picture_padding", "picturePadding"])
-          })}
-          ${renderNumberField({
-            label: "Picture Height (px, auto/rect)",
-            value: ent.picture_height ?? ent.pictureHeight,
-            min: 1,
-            max: 512,
-            onChange: (v) => patch("picture_height", v, ["pictureHeight"])
-          })}
-          ${renderNumberField({
-            label: "Picture Max Width (px)",
-            value: ent.picture_max_width ?? ent.pictureMaxWidth,
-            min: 1,
-            max: 1024,
-            onChange: (v) => patch("picture_max_width", v, ["pictureMaxWidth"])
-          })}
-        </div>
+        ${this.renderEntityStyleFields(ent, patch, false)}
       </div>
 
       <div class="section">
@@ -1078,9 +1156,238 @@ export class HaGmapCardEditor extends LitElement {
     this.updateTopField("geojson_layers", arrayUpdate(this.getGeoLayersArray(), index, nextLayer));
   }
 
+  private renderGeoPointFields(
+    g: Record<string, any>,
+    patch: (key: string, val: any, aliases?: string[]) => void
+  ): TemplateResult {
+    return html`
+      <div class="grid">
+        ${renderTextField({
+          label: "Icon (mdi:... or cli:...)",
+          value: g.icon,
+          placeholder: "cli:translink-logo",
+          onChange: (v) => patch("icon", v)
+        })}
+        ${renderTextField({
+          label: "Image URL",
+          value: g.image ?? g.picture,
+          onChange: (v) => patch("image", v, ["picture"])
+        })}
+        ${renderSelectField({
+          label: "Point Shape",
+          value: g.point_shape ?? g.pointShape ?? g.marker_type ?? g.shape ?? "",
+          options: MARKER_SHAPE_OPTIONS,
+          onChange: (v) => patch("point_shape", v, ["pointShape", "marker_type", "markerType", "shape"])
+        })}
+        ${renderNumberField({
+          label: "Point / Icon Size (px)",
+          value: g.point_size ?? g.pointSize ?? g.icon_size ?? g.size,
+          min: 1,
+          max: 512,
+          onChange: (v) => patch("point_size", v, ["pointSize", "icon_size", "iconSize", "size"])
+        })}
+        ${renderNumberField({
+          label: "Point Width (px)",
+          value: g.point_width ?? g.pointWidth,
+          min: 1,
+          max: 512,
+          onChange: (v) => patch("point_width", v, ["pointWidth"])
+        })}
+        ${renderNumberField({
+          label: "Point Height (px)",
+          value: g.point_height ?? g.pointHeight,
+          min: 1,
+          max: 512,
+          onChange: (v) => patch("point_height", v, ["pointHeight"])
+        })}
+        ${renderNumberField({
+          label: "Station Size Override (px)",
+          value: g.station_size ?? g.station_icon_size,
+          min: 1,
+          max: 512,
+          placeholder: "18",
+          onChange: (v) => patch("station_size", v, ["station_icon_size"])
+        })}
+        ${renderNumberField({
+          label: "Stop Size Override (px)",
+          value: g.stop_size ?? g.stop_icon_size,
+          min: 1,
+          max: 512,
+          placeholder: "14",
+          onChange: (v) => patch("stop_size", v, ["stop_icon_size"])
+        })}
+        ${renderTextField({
+          label: "Legacy Station Icon",
+          value: g.station_icon ?? g.stationIcon,
+          onChange: (v) => patch("station_icon", v, ["stationIcon"])
+        })}
+        ${renderTextField({
+          label: "Legacy Stop Icon",
+          value: g.stop_icon ?? g.stopIcon,
+          onChange: (v) => patch("stop_icon", v, ["stopIcon"])
+        })}
+        ${renderColorField({
+          label: "Background Color",
+          value: g.background_color ?? g.backgroundColor ?? g.point_color ?? g.pointColor,
+          placeholder: "#ffffff",
+          onChange: (v) => patch("background_color", v, ["backgroundColor", "point_color", "pointColor"])
+        })}
+        ${renderColorField({
+          label: "Border Color",
+          value: g.border_color ?? g.borderColor,
+          placeholder: "#ffffff",
+          onChange: (v) => patch("border_color", v, ["borderColor"])
+        })}
+        ${renderNumberField({
+          label: "Border Width (px)",
+          value: g.border_width ?? g.borderWidth,
+          min: 0,
+          max: 64,
+          onChange: (v) => patch("border_width", v, ["borderWidth"])
+        })}
+        ${renderNumberField({
+          label: "Border Radius (px)",
+          value: g.border_radius ?? g.borderRadius ?? g.picture_border_radius,
+          min: 0,
+          max: 256,
+          onChange: (v) => patch("border_radius", v, ["borderRadius", "picture_border_radius", "pictureBorderRadius"])
+        })}
+        ${renderNumberField({
+          label: "Padding (px)",
+          value: g.padding ?? g.picture_padding,
+          min: 0,
+          max: 128,
+          onChange: (v) => patch("padding", v, ["picture_padding", "picturePadding"])
+        })}
+      </div>
+    `;
+  }
+
+  private renderGeoLabelFields(
+    g: Record<string, any>,
+    patch: (key: string, val: any, aliases?: string[]) => void
+  ): TemplateResult {
+    return html`
+      <div class="grid">
+        <div class="checks">
+          ${renderCheckboxField({
+            label: "Show route labels on this layer",
+            checked: (g.show_labels ?? g.showLabels) !== false,
+            onChange: (c) => patch("show_labels", c, ["showLabels"])
+          })}
+        </div>
+        ${renderNumberField({
+          label: "Label Spacing (meters along line)",
+          value: g.label_spacing ?? g.labelSpacing,
+          min: 50,
+          max: 100000,
+          placeholder: "e.g. 1500",
+          onChange: (v) => patch("label_spacing", v, ["labelSpacing"])
+        })}
+        ${renderNumberField({
+          label: "Label Min Zoom",
+          value: g.label_min_zoom ?? g.labelMinZoom,
+          min: 0,
+          max: 24,
+          onChange: (v) => patch("label_min_zoom", v, ["labelMinZoom"])
+        })}
+        ${renderNumberField({
+          label: "Label Size (px height)",
+          value: g.label_size ?? g.labelSize,
+          min: 10,
+          max: 120,
+          placeholder: "22",
+          onChange: (v) => patch("label_size", v, ["labelSize"])
+        })}
+        ${renderSelectField({
+          label: "Label Shape",
+          value: g.label_shape ?? g.labelShape ?? "",
+          options: LABEL_SHAPE_OPTIONS,
+          onChange: (v) => patch("label_shape", v, ["labelShape"])
+        })}
+        ${renderColorField({
+          label: "Label Background Color",
+          value: g.label_color ?? g.labelColor ?? g.label_background_color,
+          onChange: (v) => patch("label_color", v, ["labelColor", "label_background_color"])
+        })}
+        ${renderColorField({
+          label: "Label Text Color",
+          value: g.label_text_color ?? g.labelTextColor,
+          placeholder: "#ffffff",
+          onChange: (v) => patch("label_text_color", v, ["labelTextColor"])
+        })}
+        ${renderColorField({
+          label: "Label Border Color",
+          value: g.label_border_color ?? g.labelBorderColor,
+          placeholder: "#ffffff",
+          onChange: (v) => patch("label_border_color", v, ["labelBorderColor"])
+        })}
+        ${renderNumberField({
+          label: "Label Border Width (px)",
+          value: g.label_border_width ?? g.labelBorderWidth,
+          min: 0,
+          max: 32,
+          onChange: (v) => patch("label_border_width", v, ["labelBorderWidth"])
+        })}
+        ${renderNumberField({
+          label: "Label Border Radius (px)",
+          value: g.label_border_radius ?? g.labelBorderRadius,
+          min: 0,
+          max: 128,
+          onChange: (v) => patch("label_border_radius", v, ["labelBorderRadius"])
+        })}
+        ${renderNumberField({
+          label: "Label Padding (px)",
+          value: g.label_padding ?? g.labelPadding,
+          min: 0,
+          max: 64,
+          onChange: (v) => patch("label_padding", v, ["labelPadding"])
+        })}
+      </div>
+    `;
+  }
+
   private renderGeoJsonMaster(): TemplateResult {
     const layers = this.getGeoLayersArray();
+    const geoDef = this.getSectionObject("geojson_defaults", "geojsonDefaults");
+    const patchGeoDef = (key: string, val: any, aliases?: string[]) =>
+      this.updateNestedSection("geojson_defaults", key, val, aliases, "geojsonDefaults");
     return html`
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Default GeoJSON Settings (Fallback)</span>
+        </div>
+        <div class="grid">
+          ${renderTextField({
+            label: "Default Filter Group ID",
+            value: geoDef.filter_group ?? geoDef.filterGroup ?? geoDef.group,
+            listId: "ha-gmap-filter-groups",
+            onChange: (v) => patchGeoDef("filter_group", v, ["filterGroup", "group"])
+          })}
+          ${renderColorField({
+            label: "Default Stroke Color",
+            value: geoDef.stroke_color ?? geoDef.strokeColor ?? geoDef.color,
+            placeholder: "#007aff",
+            onChange: (v) => patchGeoDef("stroke_color", v, ["strokeColor", "color"])
+          })}
+          ${renderNumberField({
+            label: "Default Stroke Width (px)",
+            value: geoDef.stroke_width ?? geoDef.strokeWidth ?? geoDef.width,
+            min: 0,
+            max: 64,
+            placeholder: "3",
+            onChange: (v) => patchGeoDef("stroke_width", v, ["strokeWidth", "width"])
+          })}
+          ${renderTriBoolField({
+            label: "Show Popup on Click",
+            value: geoDef.show_popup ?? geoDef.showPopup,
+            onChange: (v) => patchGeoDef("show_popup", v, ["showPopup"])
+          })}
+        </div>
+        <div style="margin-top: 10px;">${this.renderGeoPointFields(geoDef, patchGeoDef)}</div>
+        <div style="margin-top: 10px;">${this.renderGeoLabelFields(geoDef, patchGeoDef)}</div>
+      </div>
+
       <div class="section">
         <div class="section-header">
           <span class="section-title">GeoJSON Layers (${layers.length})</span>
@@ -1279,173 +1586,14 @@ export class HaGmapCardEditor extends LitElement {
         <div class="section-header">
           <span class="section-title">Point / Station / Stop Markers</span>
         </div>
-        <div class="grid">
-          ${renderTextField({
-            label: "Icon (mdi:... or cli:...)",
-            value: g.icon,
-            placeholder: "cli:translink-logo",
-            onChange: (v) => patch("icon", v)
-          })}
-          ${renderTextField({
-            label: "Image URL",
-            value: g.image ?? g.picture,
-            onChange: (v) => patch("image", v, ["picture"])
-          })}
-          ${renderSelectField({
-            label: "Point Shape",
-            value: g.point_shape ?? g.pointShape ?? g.marker_type ?? g.shape ?? "",
-            options: MARKER_SHAPE_OPTIONS,
-            onChange: (v) => patch("point_shape", v, ["pointShape", "marker_type", "markerType", "shape"])
-          })}
-          ${renderNumberField({
-            label: "Point / Icon Size (px)",
-            value: g.point_size ?? g.pointSize ?? g.icon_size ?? g.size,
-            min: 1,
-            max: 512,
-            onChange: (v) => patch("point_size", v, ["pointSize", "icon_size", "iconSize", "size"])
-          })}
-          ${renderNumberField({
-            label: "Station Size Override (px)",
-            value: g.station_size ?? g.station_icon_size,
-            min: 1,
-            max: 512,
-            placeholder: "18",
-            onChange: (v) => patch("station_size", v, ["station_icon_size"])
-          })}
-          ${renderNumberField({
-            label: "Stop Size Override (px)",
-            value: g.stop_size ?? g.stop_icon_size,
-            min: 1,
-            max: 512,
-            placeholder: "14",
-            onChange: (v) => patch("stop_size", v, ["stop_icon_size"])
-          })}
-          ${renderTextField({
-            label: "Legacy Station Icon",
-            value: g.station_icon ?? g.stationIcon,
-            onChange: (v) => patch("station_icon", v, ["stationIcon"])
-          })}
-          ${renderTextField({
-            label: "Legacy Stop Icon",
-            value: g.stop_icon ?? g.stopIcon,
-            onChange: (v) => patch("stop_icon", v, ["stopIcon"])
-          })}
-          ${renderColorField({
-            label: "Background Color",
-            value: g.background_color ?? g.backgroundColor ?? g.point_color ?? g.pointColor,
-            placeholder: "#ffffff",
-            onChange: (v) => patch("background_color", v, ["backgroundColor", "point_color", "pointColor"])
-          })}
-          ${renderColorField({
-            label: "Border Color",
-            value: g.border_color ?? g.borderColor,
-            placeholder: "#ffffff",
-            onChange: (v) => patch("border_color", v, ["borderColor"])
-          })}
-          ${renderNumberField({
-            label: "Border Width (px)",
-            value: g.border_width ?? g.borderWidth,
-            min: 0,
-            max: 64,
-            onChange: (v) => patch("border_width", v, ["borderWidth"])
-          })}
-          ${renderNumberField({
-            label: "Border Radius (px)",
-            value: g.border_radius ?? g.borderRadius ?? g.picture_border_radius,
-            min: 0,
-            max: 256,
-            onChange: (v) => patch("border_radius", v, ["borderRadius", "picture_border_radius", "pictureBorderRadius"])
-          })}
-          ${renderNumberField({
-            label: "Padding (px)",
-            value: g.padding ?? g.picture_padding,
-            min: 0,
-            max: 128,
-            onChange: (v) => patch("padding", v, ["picture_padding", "picturePadding"])
-          })}
-        </div>
+        ${this.renderGeoPointFields(g, patch)}
       </div>
 
       <div class="section">
         <div class="section-header">
           <span class="section-title">Route Line Badges / Labels</span>
         </div>
-        <div class="grid">
-          <div class="checks">
-            ${renderCheckboxField({
-              label: "Show route labels on this layer",
-              checked: (g.show_labels ?? g.showLabels) !== false,
-              onChange: (c) => patch("show_labels", c, ["showLabels"])
-            })}
-          </div>
-          ${renderNumberField({
-            label: "Label Spacing (meters along line)",
-            value: g.label_spacing ?? g.labelSpacing,
-            min: 50,
-            max: 100000,
-            placeholder: "e.g. 1500",
-            onChange: (v) => patch("label_spacing", v, ["labelSpacing"])
-          })}
-          ${renderNumberField({
-            label: "Label Min Zoom",
-            value: g.label_min_zoom ?? g.labelMinZoom,
-            min: 0,
-            max: 24,
-            onChange: (v) => patch("label_min_zoom", v, ["labelMinZoom"])
-          })}
-          ${renderNumberField({
-            label: "Label Size (px height)",
-            value: g.label_size ?? g.labelSize,
-            min: 10,
-            max: 120,
-            placeholder: "22",
-            onChange: (v) => patch("label_size", v, ["labelSize"])
-          })}
-          ${renderSelectField({
-            label: "Label Shape",
-            value: g.label_shape ?? g.labelShape ?? "",
-            options: LABEL_SHAPE_OPTIONS,
-            onChange: (v) => patch("label_shape", v, ["labelShape"])
-          })}
-          ${renderColorField({
-            label: "Label Background Color",
-            value: g.label_color ?? g.labelColor ?? g.label_background_color,
-            onChange: (v) => patch("label_color", v, ["labelColor", "label_background_color"])
-          })}
-          ${renderColorField({
-            label: "Label Text Color",
-            value: g.label_text_color ?? g.labelTextColor,
-            placeholder: "#ffffff",
-            onChange: (v) => patch("label_text_color", v, ["labelTextColor"])
-          })}
-          ${renderColorField({
-            label: "Label Border Color",
-            value: g.label_border_color ?? g.labelBorderColor,
-            placeholder: "#ffffff",
-            onChange: (v) => patch("label_border_color", v, ["labelBorderColor"])
-          })}
-          ${renderNumberField({
-            label: "Label Border Width (px)",
-            value: g.label_border_width ?? g.labelBorderWidth,
-            min: 0,
-            max: 32,
-            onChange: (v) => patch("label_border_width", v, ["labelBorderWidth"])
-          })}
-          ${renderNumberField({
-            label: "Label Border Radius (px)",
-            value: g.label_border_radius ?? g.labelBorderRadius,
-            min: 0,
-            max: 128,
-            onChange: (v) => patch("label_border_radius", v, ["labelBorderRadius"])
-          })}
-          ${renderNumberField({
-            label: "Label Padding (px)",
-            value: g.label_padding ?? g.labelPadding,
-            min: 0,
-            max: 64,
-            onChange: (v) => patch("label_padding", v, ["labelPadding"])
-          })}
-        </div>
+        ${this.renderGeoLabelFields(g, patch)}
       </div>
     `;
   }
@@ -1552,6 +1700,25 @@ export class HaGmapCardEditor extends LitElement {
             options: MARKER_SHAPE_OPTIONS,
             onChange: (v) =>
               this.updateNestedSection("transit_motion", "shape", v, ["vehicle_shape", "vehicleShape", "marker_type", "markerType"])
+          })}
+          ${renderTriBoolField({
+            label: "Show Vehicle Icon",
+            value: tm.show_icon ?? tm.showIcon,
+            onChange: (v) => this.updateNestedSection("transit_motion", "show_icon", v, ["showIcon"])
+          })}
+          ${renderNumberField({
+            label: "Vehicle Width (px)",
+            value: tm.vehicle_width ?? tm.vehicleWidth ?? tm.width,
+            min: 4,
+            max: 256,
+            onChange: (v) => this.updateNestedSection("transit_motion", "vehicle_width", v, ["vehicleWidth", "width"])
+          })}
+          ${renderNumberField({
+            label: "Vehicle Height (px)",
+            value: tm.vehicle_height ?? tm.vehicleHeight ?? tm.height,
+            min: 4,
+            max: 256,
+            onChange: (v) => this.updateNestedSection("transit_motion", "vehicle_height", v, ["vehicleHeight", "height"])
           })}
           <div class="checks">
             ${renderCheckboxField({
@@ -1828,11 +1995,30 @@ export class HaGmapCardEditor extends LitElement {
             placeholder: "26",
             onChange: (v) => patchRoute("icon_size", v, ["iconSize", "size"])
           })}
+          ${renderNumberField({
+            label: "Width (px)",
+            value: r.width,
+            min: 4,
+            max: 256,
+            onChange: (v) => patchRoute("width", v)
+          })}
+          ${renderNumberField({
+            label: "Height (px)",
+            value: r.height,
+            min: 4,
+            max: 256,
+            onChange: (v) => patchRoute("height", v)
+          })}
           ${renderSelectField({
             label: "Vehicle Shape",
             value: r.shape ?? r.marker_type ?? r.markerType ?? r.point_shape ?? "",
             options: MARKER_SHAPE_OPTIONS,
             onChange: (v) => patchRoute("shape", v, ["marker_type", "markerType", "point_shape", "pointShape"])
+          })}
+          ${renderTriBoolField({
+            label: "Show Vehicle Icon",
+            value: r.show_icon ?? r.showIcon,
+            onChange: (v) => patchRoute("show_icon", v, ["showIcon"])
           })}
           ${renderTriBoolField({
             label: "Directional Rotation",
@@ -1956,6 +2142,9 @@ export class HaGmapCardEditor extends LitElement {
                           <span class="row-title">${gVal?.name || gVal?.label || gKey} (${gKey})</span>
                           <div class="row-meta">
                             <span class="pill">${gVal?.default === false ? "hidden by default" : "visible by default"}</span>
+                            ${gVal?.active_from || gVal?.activeFrom || gVal?.active_until || gVal?.activeUntil
+                              ? html`<span class="pill">${gVal?.active_from ?? gVal?.activeFrom ?? "00:00"}–${gVal?.active_until ?? gVal?.activeUntil ?? "24:00"}</span>`
+                              : nothing}
                             ${gVal?.icon ? html`<span class="pill">${gVal.icon}</span>` : nothing}
                           </div>
                         </div>
@@ -2053,6 +2242,18 @@ export class HaGmapCardEditor extends LitElement {
             value: g.position ?? "",
             options: [{ value: "", label: "Inherit from layer_filters" }, ...POS_OPTIONS],
             onChange: (v) => patchGroup("position", v)
+          })}
+          ${renderTextField({
+            label: "Active From (HH:MM, optional schedule)",
+            value: g.active_from ?? g.activeFrom,
+            placeholder: "05:00",
+            onChange: (v) => patchGroup("active_from", v, ["activeFrom"])
+          })}
+          ${renderTextField({
+            label: "Active Until (HH:MM, optional schedule)",
+            value: g.active_until ?? g.activeUntil,
+            placeholder: "01:45",
+            onChange: (v) => patchGroup("active_until", v, ["activeUntil"])
           })}
           <div class="checks">
             ${renderCheckboxField({

@@ -1,7 +1,42 @@
 import { FilterGroupConfig, LayerFiltersConfig } from "../config/schema";
 
+function parseTimeMinutes(hhmm?: string): number | null {
+  if (!hhmm || typeof hhmm !== "string") return null;
+  const m = hhmm.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) {
+    return null;
+  }
+  return hh * 60 + mm;
+}
+
+/**
+ * Evaluates whether `now` falls within `[from, until]` (`HH:MM`, supports overnight wrap like `23:30` -> `05:30`).
+ * Returns `null` if no valid time window is configured.
+ */
+export function isTimeInWindow(now: Date, from?: string, until?: string): boolean | null {
+  const fromMin = parseTimeMinutes(from);
+  const untilMin = parseTimeMinutes(until);
+  if (fromMin === null && untilMin === null) return null;
+  const curMin = now.getHours() * 60 + now.getMinutes();
+  if (fromMin !== null && untilMin !== null) {
+    if (fromMin <= untilMin) {
+      return curMin >= fromMin && curMin < untilMin;
+    }
+    return curMin >= fromMin || curMin < untilMin;
+  }
+  if (fromMin !== null) return curMin >= fromMin;
+  return curMin < untilMin!;
+}
+
 export class FilterController {
   private filterStates = new Map<string, boolean>();
+  private manualOverrides = new Set<string>();
+  private checkboxes = new Map<string, HTMLInputElement>();
+  private updateDotFn: (() => void) | null = null;
+  private scheduleTimer: any = null;
   private onStateChangeCallbacks: Array<(filterId: string, active: boolean) => void> = [];
   private cleanupFns: Array<() => void> = [];
 
@@ -9,8 +44,29 @@ export class FilterController {
     private layerConfig: LayerFiltersConfig,
     private groups: Record<string, FilterGroupConfig>
   ) {
+    const now = new Date();
+    let hasTimedGroup = false;
     for (const [id, grp] of Object.entries(groups)) {
-      this.filterStates.set(id, grp.default !== false);
+      const timed = isTimeInWindow(now, grp.activeFrom, grp.activeUntil);
+      if (timed !== null) hasTimedGroup = true;
+      this.filterStates.set(id, timed ?? grp.default !== false);
+    }
+    if (hasTimedGroup && typeof setInterval === "function") {
+      this.scheduleTimer = setInterval(() => this.evaluateTimeWindows(), 60000);
+    }
+  }
+
+  private evaluateTimeWindows() {
+    const now = new Date();
+    for (const [id, grp] of Object.entries(this.groups)) {
+      if (this.manualOverrides.has(id)) continue;
+      const timed = isTimeInWindow(now, grp.activeFrom, grp.activeUntil);
+      if (timed !== null && this.filterStates.get(id) !== timed) {
+        this.setFilter(id, timed);
+        const chk = this.checkboxes.get(id);
+        if (chk) chk.checked = timed;
+        this.updateDotFn?.();
+      }
     }
   }
 
@@ -113,6 +169,7 @@ export class FilterController {
       }
       dot.style.display = anyDisabled ? "block" : "none";
     };
+    this.updateDotFn = updateDot;
 
     for (const [id, grp] of Object.entries(this.groups)) {
       const row = document.createElement("label");
@@ -132,11 +189,13 @@ export class FilterController {
       chk.type = "checkbox";
       chk.checked = this.isFilterActive(id);
       chk.style.cssText = `width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: ${grp.color || "var(--primary-color, #1a73e8)"}; flex-shrink: 0;`;
+      this.checkboxes.set(id, chk);
 
       row.addEventListener("click", (e) => e.stopPropagation());
       chk.addEventListener("click", (e) => e.stopPropagation());
       chk.addEventListener("change", (e) => {
         e.stopPropagation();
+        this.manualOverrides.add(id);
         this.setFilter(id, chk.checked);
         updateDot();
       });
@@ -197,12 +256,18 @@ export class FilterController {
   }
 
   public destroy() {
+    if (this.scheduleTimer) {
+      clearInterval(this.scheduleTimer);
+      this.scheduleTimer = null;
+    }
     for (const fn of this.cleanupFns) {
       try {
         fn();
       } catch (_) {}
     }
     this.cleanupFns = [];
+    this.checkboxes.clear();
+    this.updateDotFn = null;
     this.onStateChangeCallbacks = [];
   }
 }

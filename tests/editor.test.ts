@@ -7,11 +7,13 @@ import {
   arrayRemove,
   arrayUpdate,
   cleanFieldUpdate,
+  MARKER_SHAPES,
   normalizeEntityForEditor,
   normalizeFilterGroupsToRecord,
   parsePopupCardInput,
   recordDeleteKey,
   recordRenameKey,
+  ROUTE_LABEL_SHAPES,
   toHexPickerValue
 } from "../src/editor/helpers";
 
@@ -179,5 +181,7 @@ describe("Editor Config Helpers", () => {
       icon: "mdi:train",
       default: true
     });
+    expect(MARKER_SHAPES).toEqual(["circle", "square", "rectangle", "triangle", "arrow", "none"]);
+    expect(ROUTE_LABEL_SHAPES).toEqual(["rectangle", "square", "circle"]);
   });
 });

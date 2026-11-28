@@ -19,14 +19,12 @@ export const MARKER_SHAPES: readonly string[] = [
   "rectangle",
   "triangle",
   "arrow",
-  "icon",
-  "picture",
-  "auto"
+  "none"
 ];
 
 export const PICTURE_SHAPES: readonly string[] = ["circle", "rectangle", "auto"];
 
-export const ROUTE_LABEL_SHAPES: readonly string[] = ["pill", "rectangle", "square", "circle"];
+export const ROUTE_LABEL_SHAPES: readonly string[] = ["rectangle", "square", "circle"];
 
 /**
  * Safely deep-clones plain configuration values.

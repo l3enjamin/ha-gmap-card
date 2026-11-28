@@ -17,6 +17,8 @@ const customSvgBadgeCache = new Map<string, string>();
 
 export interface SvgBadgeStyleOptions {
   size?: number;
+  width?: number;
+  height?: number;
   shape?: string;
   bgColor?: string;
   borderColor?: string;
@@ -56,28 +58,54 @@ export function buildSvgBadgeDataUrl(
   opts: SvgBadgeStyleOptions & { defaultBg?: string; fgColor?: string } = {}
 ): string {
   const sz = Number(opts.size) || 24;
-  const shape = opts.shape && opts.shape !== "auto" && opts.shape !== "icon" ? opts.shape : "circle";
-  const w = shape === "rectangle" ? Math.round(sz * 1.4) : sz;
-  const h = sz;
+  const rawShape = opts.shape;
+  const shape =
+    rawShape && rawShape !== "auto" && rawShape !== "icon" && rawShape !== "picture" && rawShape !== "none"
+      ? rawShape
+      : "circle";
+  const w = Number(opts.width) || (shape === "rectangle" ? Math.round(sz * 1.4) : sz);
+  const h = Number(opts.height) || sz;
   const bw = opts.borderWidth ?? (opts.borderColor ? 1.5 : 0);
   const pad = opts.padding ?? (bw > 0 || opts.bgColor ? 2 : 0);
   const bg = opts.bgColor || opts.defaultBg || "#ffffff";
   const border = opts.borderColor || "#ffffff";
   const rx = opts.borderRadius ?? (shape === "circle" ? Math.max(w, h) / 2 : 4);
-  const inset = bw + pad;
-  const innerW = Math.max(4, w - inset * 2);
-  const innerH = Math.max(4, h - inset * 2);
+  const halfBw = bw / 2;
 
-  const bgShape =
-    shape === "circle"
-      ? `<circle cx='${w / 2}' cy='${h / 2}' r='${Math.max(1, Math.min(w, h) / 2 - bw / 2)}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}'` : ""}/>`
-      : `<rect x='${bw / 2}' y='${bw / 2}' width='${Math.max(1, w - bw)}' height='${Math.max(1, h - bw)}' rx='${rx}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}'` : ""}/>`;
+  let bgShape = "";
+  let insetX = bw + pad;
+  let insetY = bw + pad;
+  let innerW = Math.max(4, w - insetX * 2);
+  let innerH = Math.max(4, h - insetY * 2);
+
+  if (shape === "circle") {
+    bgShape = `<circle cx='${w / 2}' cy='${h / 2}' r='${Math.max(1, Math.min(w, h) / 2 - halfBw)}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}'` : ""}/>`;
+  } else if (shape === "triangle") {
+    bgShape = `<polygon points='${w / 2},${halfBw} ${w - halfBw},${h - halfBw} ${halfBw},${h - halfBw}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}' stroke-linejoin='round'` : ""}/>`;
+    innerW = Math.max(4, Math.round(w * 0.45) - pad);
+    innerH = Math.max(4, Math.round(h * 0.45) - pad);
+    insetX = Math.round((w - innerW) / 2);
+    insetY = Math.round(h * 0.46);
+  } else if (shape === "arrow") {
+    const notchY = Math.round(h * 0.72);
+    bgShape = `<polygon points='${w / 2},${halfBw} ${w - halfBw},${h - halfBw} ${w / 2},${notchY} ${halfBw},${h - halfBw}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}' stroke-linejoin='round'` : ""}/>`;
+    innerW = Math.max(4, Math.round(w * 0.36) - Math.round(pad / 2));
+    innerH = Math.max(4, Math.round(h * 0.36) - Math.round(pad / 2));
+    insetX = Math.round((w - innerW) / 2);
+    insetY = Math.round(h * 0.34);
+  } else {
+    bgShape = `<rect x='${halfBw}' y='${halfBw}' width='${Math.max(1, w - bw)}' height='${Math.max(1, h - bw)}' rx='${rx}' fill='${bg}'${bw > 0 ? ` stroke='${border}' stroke-width='${bw}'` : ""}/>`;
+  }
 
   const fgAttr = opts.fgColor ? ` fill='${opts.fgColor}'` : "";
+  const innerEl =
+    innerMarkup && innerMarkup.trim()
+      ? `<svg x='${insetX}' y='${insetY}' width='${innerW}' height='${innerH}' viewBox='${viewBox}' preserveAspectRatio='xMidYMid meet'${fgAttr}>${innerMarkup}</svg>`
+      : "";
   const svg =
     `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${w} ${h}' width='${w}' height='${h}'>` +
     bgShape +
-    `<svg x='${inset}' y='${inset}' width='${innerW}' height='${innerH}' viewBox='${viewBox}' preserveAspectRatio='xMidYMid meet'${fgAttr}>${innerMarkup}</svg>` +
+    innerEl +
     `</svg>`;
   return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
 }
@@ -105,13 +133,15 @@ export function resolveCustomSvgBadgeDataUrl(
 ): string | null {
   if (!svgUrl || typeof svgUrl !== "string") return null;
   const sz = Number(opts.size) || 24;
+  const w = opts.width ?? sz;
+  const h = opts.height ?? sz;
   const shape = opts.shape || "circle";
   const bg = opts.bgColor || "#ffffff";
   const border = opts.borderColor || "";
   const bw = opts.borderWidth ?? "";
   const br = opts.borderRadius ?? "";
   const pad = opts.padding ?? "";
-  const cacheKey = `${svgUrl}|${sz}|${shape}|${bg}|${border}|${bw}|${br}|${pad}`;
+  const cacheKey = `${svgUrl}|${sz}|${w}|${h}|${shape}|${bg}|${border}|${bw}|${br}|${pad}`;
 
   const cachedBadge = customSvgBadgeCache.get(cacheKey);
   if (cachedBadge) return cachedBadge;
@@ -172,6 +202,8 @@ export function resolveMdiIconDataUrl(
   if (!mdiName) return null;
 
   const sz = Number(opts.size) || 24;
+  const w = opts.width ?? sz;
+  const h = opts.height ?? sz;
   const bgColor = opts.bgColor || "";
   const fgColor = opts.fgColor || (bgColor ? "#ffffff" : "#1E88E5");
   const borderColor = opts.borderColor || "#ffffff";
@@ -180,7 +212,7 @@ export function resolveMdiIconDataUrl(
   const bw = opts.borderWidth ?? (badge ? 1.5 : 0);
   const br = opts.borderRadius ?? "";
   const pad = opts.padding ?? "";
-  const cacheKey = `${mdiName}|${sz}|${bgColor}|${fgColor}|${borderColor}|${badge ? 1 : 0}|${shape}|${bw}|${br}|${pad}`;
+  const cacheKey = `${mdiName}|${sz}|${w}|${h}|${bgColor}|${fgColor}|${borderColor}|${badge ? 1 : 0}|${shape}|${bw}|${br}|${pad}`;
 
   if (mdiIconCache.has(cacheKey)) {
     const cached = mdiIconCache.get(cacheKey);
@@ -205,6 +237,8 @@ export function resolveMdiIconDataUrl(
       const dataUrl = badge
         ? buildSvgBadgeDataUrl(inner, "0 0 24 24", {
             size: sz,
+            width: opts.width,
+            height: opts.height,
             shape,
             bgColor,
             borderColor,
@@ -215,7 +249,7 @@ export function resolveMdiIconDataUrl(
           })
         : "data:image/svg+xml;charset=UTF-8," +
           encodeURIComponent(
-            `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${sz}' height='${sz}' fill='${fgColor}'>${inner}</svg>`
+            `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='${w}' height='${h}' fill='${fgColor}'>${inner}</svg>`
           );
       mdiIconCache.set(cacheKey, dataUrl);
       return dataUrl;
@@ -258,70 +292,84 @@ export function getTransitVehicleIcon(
   routeType: "subway" | "bus",
   onAsyncReady?: (iconObj: any) => void,
   schedule?: TransitSchedule | null,
-  bearingDeg = 0
+  _bearingDeg = 0
 ): any {
   const rKeyLower = String(routeKey || "").toLowerCase();
   const routeCfg = motionCfg.routes?.[routeKey] || motionCfg.routes?.[rKeyLower] || {};
   const schedRouteMeta = schedule?.routes?.[routeKey] || schedule?.routes?.[rKeyLower];
+  const effectiveType: "subway" | "bus" = schedRouteMeta?.routeType === 3 ? "bus" : routeType;
   const vehicles = motionCfg.vehicles || {};
 
   const sz = Number(routeCfg.iconSize || 26);
   const shape = routeCfg.shape ?? motionCfg.vehicleShape;
+  const w = routeCfg.width ?? motionCfg.vehicleWidth ?? (shape === "rectangle" ? Math.round(sz * 1.4) : sz);
+  const h = routeCfg.height ?? motionCfg.vehicleHeight ?? sz;
+  const showIcon = routeCfg.showIcon ?? motionCfg.vehicleShowIcon;
   const bgColor = routeCfg.backgroundColor ?? motionCfg.vehicleBackgroundColor ?? routeCfg.color ?? schedRouteMeta?.color;
   const borderColor = routeCfg.borderColor ?? motionCfg.vehicleBorderColor;
   const borderWidth = routeCfg.borderWidth ?? motionCfg.vehicleBorderWidth;
   const borderRadius = routeCfg.borderRadius ?? motionCfg.vehicleBorderRadius;
   const padding = routeCfg.padding ?? motionCfg.vehiclePadding;
 
-  if (shape === "triangle" || shape === "arrow") {
-    const fillColor = bgColor || (routeType === "bus" ? "#008542" : "#0072CE");
-    const strokeColor = borderColor || "#ffffff";
-    const sw = borderWidth ?? 1.5;
-    if (googleMaps?.SymbolPath?.FORWARD_CLOSED_ARROW !== undefined) {
-      return {
-        path: googleMaps.SymbolPath.FORWARD_CLOSED_ARROW,
-        scale: Math.max(3, sz / 4.2),
-        fillColor,
-        fillOpacity: 1,
-        strokeColor,
-        strokeWeight: sw,
-        rotation: bearingDeg
-      };
-    }
-    const triUrl = buildTriangleSvgDataUrl({ size: sz, fillColor, borderColor: strokeColor, borderWidth: sw });
-    return {
-      url: triUrl,
-      scaledSize: new googleMaps.Size(sz, sz),
-      anchor: new googleMaps.Point(sz / 2, sz / 2)
-    };
-  }
-
-  const iconSpec =
-    routeCfg.image ||
-    routeCfg.icon ||
-    vehicles[routeKey] ||
-    vehicles[rKeyLower] ||
-    vehicles[routeType] ||
-    DEFAULT_VEHICLE_ICONS[routeKey] ||
-    DEFAULT_VEHICLE_ICONS[rKeyLower] ||
-    DEFAULT_VEHICLE_ICONS[routeType] ||
-    (routeType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
-
-  const w = shape === "rectangle" ? Math.round(sz * 1.4) : sz;
-  const hasBadgeStyle = Boolean(
-    (shape && shape !== "auto" && shape !== "icon") ||
-      bgColor ||
-      borderColor ||
-      borderWidth !== undefined ||
-      borderRadius !== undefined ||
-      padding !== undefined
-  );
-
-  const makeIconObj = (url: string, width = sz, height = sz) => ({
+  const makeIconObj = (url: string, width = w, height = h) => ({
     url,
     scaledSize: new googleMaps.Size(width, height),
     anchor: new googleMaps.Point(width / 2, height / 2)
   });
+
+  const explicitIconSpec =
+    routeCfg.image ||
+    routeCfg.icon ||
+    vehicles[routeKey] ||
+    vehicles[rKeyLower] ||
+    vehicles[effectiveType];
+
+  const isGeometricShape = Boolean(
+    shape && shape !== "auto" && shape !== "none" && shape !== "icon" && shape !== "picture"
+  );
+
+  // Pure shape mode: show_icon explicitly false, icon "none", or geometric shape requested with no explicit icon
+  if (
+    showIcon === false ||
+    explicitIconSpec === "none" ||
+    (!explicitIconSpec && isGeometricShape)
+  ) {
+    const pureBg = bgColor || (effectiveType === "bus" ? "#008542" : "#0072CE");
+    const pureUrl = buildSvgBadgeDataUrl("", "0 0 24 24", {
+      size: sz,
+      width: w,
+      height: h,
+      shape: shape && shape !== "none" ? shape : "circle",
+      bgColor: pureBg,
+      borderColor: borderColor || "#ffffff",
+      borderWidth: borderWidth ?? 1.5,
+      borderRadius,
+      padding: 0
+    });
+    return makeIconObj(pureUrl, w, h);
+  }
+
+  const iconSpec =
+    explicitIconSpec ||
+    DEFAULT_VEHICLE_ICONS[routeKey] ||
+    DEFAULT_VEHICLE_ICONS[rKeyLower] ||
+    DEFAULT_VEHICLE_ICONS[effectiveType] ||
+    (effectiveType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
+
+  const hasBadgeStyle =
+    shape !== "none" &&
+    Boolean(
+      isGeometricShape ||
+        bgColor ||
+        borderColor ||
+        borderWidth !== undefined ||
+        borderRadius !== undefined ||
+        padding !== undefined ||
+        routeCfg.width !== undefined ||
+        routeCfg.height !== undefined ||
+        motionCfg.vehicleWidth !== undefined ||
+        motionCfg.vehicleHeight !== undefined
+    );
 
   const customUrl = typeof iconSpec === "string" ? resolveCustomIconUrl(iconSpec) : null;
   const svgUrl =
@@ -332,26 +380,28 @@ export function getTransitVehicleIcon(
     if (hasBadgeStyle) {
       const badgedUrl = resolveCustomSvgBadgeDataUrl(
         svgUrl,
-        { size: sz, shape, bgColor, borderColor, borderWidth, borderRadius, padding },
+        { size: sz, width: w, height: h, shape, bgColor, borderColor, borderWidth, borderRadius, padding },
         (dataUrl) => {
-          if (onAsyncReady && dataUrl) onAsyncReady(makeIconObj(dataUrl, w, sz));
+          if (onAsyncReady && dataUrl) onAsyncReady(makeIconObj(dataUrl, w, h));
         }
       );
-      if (badgedUrl) return makeIconObj(badgedUrl, w, sz);
+      if (badgedUrl) return makeIconObj(badgedUrl, w, h);
     }
-    return makeIconObj(svgUrl);
+    return makeIconObj(svgUrl, w, h);
   }
 
   // If no custom icon was configured but schedule/route has a color, render a colored subway/bus SVG badge
-  if (!routeCfg.icon && !routeCfg.image && !vehicles[routeKey] && !vehicles[rKeyLower] && !vehicles[routeType] && schedRouteMeta?.color) {
+  if (!explicitIconSpec && schedRouteMeta?.color) {
     const colorUrl = buildSvgBadgeDataUrl(
-      routeType === "bus"
+      effectiveType === "bus"
         ? "<path d='M16 9.5H8v-3h8v3zm-.8-5.5H8.8c-1.8 0-2.8 1-2.8 2.8v7.4c0 1.2.8 2.2 2 2.2v1.6c0 .5.4 1 1 1h.5c.6 0 1-.5 1-1V16h3v1.6c0 .5.4 1 1 1h.5c.6 0 1-.5 1-1V16c1.2 0 2-1 2-2.2V6.8c0-1.8-1-2.8-2.8-2.8z' fill='#ffffff'/>"
         : "<path d='M12 4c-3.5 0-6 .4-6 3.5v7c0 1.9 1.3 3.5 3 3.5L8 19.5v.5h8v-.5L15 18c1.7 0 3-1.6 3-3.5v-7c0-3.1-2.5-3.5-6-3.5zm-3 11a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4zm6 0a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4zm1-5H8V7.5h8V10z' fill='#ffffff'/>",
       "0 0 24 24",
       {
         size: sz,
-        shape: shape || "circle",
+        width: w,
+        height: h,
+        shape: shape && shape !== "none" ? shape : "circle",
         bgColor: schedRouteMeta.color,
         borderColor: borderColor || "#ffffff",
         borderWidth: borderWidth ?? 1.5,
@@ -359,36 +409,38 @@ export function getTransitVehicleIcon(
         padding: padding ?? 2
       }
     );
-    return makeIconObj(colorUrl, w, sz);
+    return makeIconObj(colorUrl, w, h);
   }
 
   if (typeof iconSpec === "string" && iconSpec.trim().startsWith("mdi:")) {
     const fallbackUrl =
       DEFAULT_VEHICLE_ICONS[rKeyLower] ||
-      DEFAULT_VEHICLE_ICONS[routeType] ||
-      (routeType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
-    const resolvedBg = bgColor || routeCfg.color || schedRouteMeta?.color || (routeType === "bus" ? "#008542" : "#0072CE");
+      DEFAULT_VEHICLE_ICONS[effectiveType] ||
+      (effectiveType === "bus" ? GENERIC_BUS_SVG : GENERIC_SUBWAY_SVG);
+    const resolvedBg = shape === "none" ? "" : bgColor || routeCfg.color || schedRouteMeta?.color || (effectiveType === "bus" ? "#008542" : "#0072CE");
     const cachedUrl = resolveMdiIconDataUrl(
       iconSpec,
       {
         size: sz,
+        width: w,
+        height: h,
         shape,
         bgColor: resolvedBg,
-        fgColor: "#ffffff",
+        fgColor: shape === "none" ? (bgColor || routeCfg.color || schedRouteMeta?.color || "#1E88E5") : "#ffffff",
         borderColor: borderColor || "#ffffff",
         borderWidth,
         borderRadius,
         padding,
-        badge: true
+        badge: shape !== "none"
       },
       (dataUrl) => {
-        if (onAsyncReady && dataUrl) onAsyncReady(makeIconObj(dataUrl, w, sz));
+        if (onAsyncReady && dataUrl) onAsyncReady(makeIconObj(dataUrl, w, h));
       }
     );
-    return makeIconObj(cachedUrl || fallbackUrl);
+    return makeIconObj(cachedUrl || fallbackUrl, w, h);
   }
 
-  return makeIconObj(iconSpec);
+  return makeIconObj(iconSpec, w, h);
 }
 
 interface BusMotionState {
@@ -404,6 +456,8 @@ interface ActiveTripMarkerState {
   startSec: number;
   simOffset: number;
   lineKey: string;
+  shouldRotate: boolean;
+  rotatorEl?: HTMLElement | null;
   lastBearing?: number;
 }
 
@@ -413,6 +467,8 @@ export interface TransitMotionHost {
   routePolylines: Map<string, number[][][]>;
   isEntityFilterActive: (entityId: string) => boolean;
   hasMapId?: boolean;
+  domMarkerLayer?: any;
+  initialFilterActive?: boolean;
 }
 
 export class TransitMotionEngine {
@@ -421,6 +477,7 @@ export class TransitMotionEngine {
   private busStates = new Map<string, BusMotionState>();
   private schedule: TransitSchedule | null = null;
   private loadedUrl: string | null = null;
+  private visualSignature = "";
   private ingestTimer: any = null;
   private animTimer: any = null;
   private zoomListener: any = null;
@@ -437,35 +494,74 @@ export class TransitMotionEngine {
     private host: TransitMotionHost
   ) {
     this.frameIntervalMs = 1000 / Math.max(5, Math.min(60, motionConfig.fps));
+    this.filterActive = host.initialFilterActive ?? true;
     this.syncConfig(motionConfig);
     this.setupListeners();
     this.checkZoom();
     this.startLoops();
   }
 
+  private computeVisualSignature(cfg: TransitMotionConfig): string {
+    return JSON.stringify([
+      cfg.routes,
+      cfg.vehicles,
+      cfg.vehicleShape,
+      cfg.vehicleWidth,
+      cfg.vehicleHeight,
+      cfg.vehicleBackgroundColor,
+      cfg.vehicleBorderColor,
+      cfg.vehicleBorderWidth,
+      cfg.vehicleBorderRadius,
+      cfg.vehiclePadding,
+      cfg.vehicleDirectional,
+      cfg.vehicleShowIcon
+    ]);
+  }
+
+  private clearScheduledMarkers() {
+    for (const marker of this.scheduledMarkers.values()) {
+      try {
+        if (typeof marker.setMap === "function") marker.setMap(null);
+        else marker.map = null;
+      } catch (_) {}
+    }
+    this.scheduledMarkers.clear();
+    this.activeTrips.clear();
+  }
+
   public syncConfig(nextCfg: TransitMotionConfig) {
+    const nextSig = this.computeVisualSignature(nextCfg);
+    const visualChanged = Boolean(this.visualSignature && nextSig !== this.visualSignature);
+    this.visualSignature = nextSig;
     this.motionConfig = nextCfg;
     this.frameIntervalMs = 1000 / Math.max(5, Math.min(60, nextCfg.fps));
-    if (nextCfg.scheduleUrl && nextCfg.scheduleUrl !== this.loadedUrl) {
-      this.loadedUrl = nextCfg.scheduleUrl;
-      this.loadSchedule(nextCfg.scheduleUrl);
-    } else if (!nextCfg.scheduleUrl) {
+
+    if (!nextCfg.scheduleUrl) {
       this.loadedUrl = null;
       this.schedule = null;
-      for (const marker of this.scheduledMarkers.values()) {
-        try {
-          if (typeof marker.setMap === "function") marker.setMap(null);
-          else marker.map = null;
-        } catch (_) {}
+      this.clearScheduledMarkers();
+    } else if (nextCfg.scheduleUrl !== this.loadedUrl) {
+      this.loadedUrl = nextCfg.scheduleUrl;
+      this.schedule = null;
+      this.clearScheduledMarkers();
+      if (this.filterActive && nextCfg.enabled) {
+        this.loadSchedule(nextCfg.scheduleUrl);
       }
-      this.scheduledMarkers.clear();
-      this.activeTrips.clear();
+    } else if (visualChanged) {
+      this.clearScheduledMarkers();
+      if (this.filterActive && nextCfg.enabled) {
+        this.ingestTick();
+      }
     }
     this.updateVisibility();
   }
 
   public setFilterActive(active: boolean) {
     this.filterActive = active;
+    if (active && this.motionConfig.scheduleUrl && !this.schedule && this.motionConfig.enabled) {
+      this.loadedUrl = this.motionConfig.scheduleUrl;
+      this.loadSchedule(this.motionConfig.scheduleUrl);
+    }
     this.updateVisibility();
     if (active) {
       this.ingestTick();
@@ -644,10 +740,12 @@ export class TransitMotionEngine {
 
   private ingestTick() {
     if (!this.motionConfig.enabled || !this.map) return;
-    if (this.filterActive && !this.isCulled) {
-      this.ingestScheduledVehicles(new Date());
+    if (this.filterActive) {
+      if (!this.isCulled) {
+        this.ingestScheduledVehicles(new Date());
+      }
+      this.ingestBuses(Date.now());
     }
-    this.ingestBuses(Date.now());
     if (this.hasActiveMotion()) {
       this.ensureAnimLoop();
     } else {
@@ -665,84 +763,77 @@ export class TransitMotionEngine {
     for (const trip of active) {
       activeKeys.add(trip.key);
       const prevTrip = this.activeTrips.get(trip.key);
-      this.activeTrips.set(trip.key, {
-        pts: trip.profile.pts,
-        startSec: trip.startSec,
-        simOffset: trip.simOffset,
-        lineKey: trip.lineKey,
-        lastBearing: prevTrip?.lastBearing
-      });
+      const routeCfg =
+        this.motionConfig.routes?.[trip.lineKey] ||
+        this.motionConfig.routes?.[trip.lineKey.toLowerCase()];
+      const schedMeta =
+        this.schedule.routes?.[trip.lineKey] ||
+        this.schedule.routes?.[trip.lineKey.toLowerCase()];
+      const shouldRotate = Boolean(routeCfg?.directional ?? this.motionConfig.vehicleDirectional ?? false);
 
       if (!this.scheduledMarkers.has(trip.key)) {
-        const routeCfg =
-          this.motionConfig.routes?.[trip.lineKey] ||
-          this.motionConfig.routes?.[trip.lineKey.toLowerCase()];
-        const schedMeta =
-          this.schedule.routes?.[trip.lineKey] ||
-          this.schedule.routes?.[trip.lineKey.toLowerCase()];
         const routeLabel = routeCfg?.label || routeCfg?.name || schedMeta?.label || "";
         const baseTitle = trip.profile.h || trip.lineKey;
         const markerTitle = routeLabel ? `${routeLabel} · ${baseTitle}` : String(baseTitle);
         const show = this.filterActive && !this.isCulled && this.motionConfig.enabled;
-        const shape = routeCfg?.shape ?? this.motionConfig.vehicleShape;
-        const useCssDom =
-          Boolean(this.host.hasMapId) &&
-          Boolean(this.googleMaps.marker?.AdvancedMarkerElement) &&
-          (shape === "triangle" || shape === "arrow" || routeCfg?.directional || this.motionConfig.vehicleDirectional);
+        const useDom =
+          typeof document !== "undefined" &&
+          ((Boolean(this.host.hasMapId) && Boolean(this.googleMaps.marker?.AdvancedMarkerElement)) ||
+            Boolean(this.host.domMarkerLayer));
 
         let newMarker: any = null;
         let domImgEl: HTMLImageElement | null = null;
+        let rotatorEl: HTMLDivElement | null = null;
+        const routeType: "subway" | "bus" = schedMeta?.routeType === 3 ? "bus" : "subway";
+
         const iconObj = getTransitVehicleIcon(
           this.googleMaps,
           trip.lineKey,
           this.motionConfig,
-          "subway",
+          routeType,
           (asyncIcon) => {
-            if (newMarker && typeof newMarker.setIcon === "function") {
-              newMarker.setIcon(asyncIcon);
-            } else if (domImgEl && asyncIcon?.url) {
+            if (domImgEl && asyncIcon?.url) {
               domImgEl.src = asyncIcon.url;
+            } else if (newMarker && typeof newMarker.setIcon === "function") {
+              newMarker.setIcon(asyncIcon);
             }
           },
           this.schedule
         );
 
-        if (useCssDom) {
-          const sz = Number(routeCfg?.iconSize || 26);
-          const fill = routeCfg?.backgroundColor || this.motionConfig.vehicleBackgroundColor || routeCfg?.color || schedMeta?.color || "#0072CE";
-          const stroke = routeCfg?.borderColor || this.motionConfig.vehicleBorderColor || "#ffffff";
-          const sw = routeCfg?.borderWidth ?? this.motionConfig.vehicleBorderWidth ?? 1.5;
-          const wrapper = document.createElement("div");
-          wrapper.style.cssText = `width:${sz}px;height:${sz}px;display:flex;align-items:center;justify-content:center;transition:transform 150ms linear;will-change:transform;`;
-          if (shape === "triangle" || shape === "arrow") {
-            const svgNS = "http://www.w3.org/2000/svg";
-            const svg = document.createElementNS(svgNS, "svg");
-            svg.setAttribute("viewBox", "0 0 24 24");
-            svg.setAttribute("width", String(sz));
-            svg.setAttribute("height", String(sz));
-            svg.style.cssText = "display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.45));";
-            const poly = document.createElementNS(svgNS, "polygon");
-            poly.setAttribute("points", "12,2 21,21 12,17 3,21");
-            poly.setAttribute("fill", String(fill));
-            poly.setAttribute("stroke", String(stroke));
-            poly.setAttribute("stroke-width", String(sw));
-            poly.setAttribute("stroke-linejoin", "round");
-            svg.appendChild(poly);
-            wrapper.appendChild(svg);
-          } else if (iconObj?.url) {
-            const img = document.createElement("img");
-            img.src = iconObj.url;
-            img.style.cssText = `width:${sz}px;height:${sz}px;object-fit:contain;display:block;`;
-            domImgEl = img;
-            wrapper.appendChild(img);
+        const iconW = iconObj?.scaledSize?.width || Number(routeCfg?.width || this.motionConfig.vehicleWidth || routeCfg?.iconSize || 26);
+        const iconH = iconObj?.scaledSize?.height || Number(routeCfg?.height || this.motionConfig.vehicleHeight || routeCfg?.iconSize || 26);
+
+        if (useDom && iconObj?.url) {
+          const outer = document.createElement("div");
+          outer.style.cssText = `width:${iconW}px;height:${iconH}px;display:flex;align-items:center;justify-content:center;pointer-events:none;`;
+          const rotator = document.createElement("div");
+          rotator.style.cssText = `width:${iconW}px;height:${iconH}px;display:flex;align-items:center;justify-content:center;transform-origin:center center;transition:transform 150ms linear;will-change:transform;`;
+          const img = document.createElement("img");
+          img.src = iconObj.url;
+          img.style.cssText = `width:${iconW}px;height:${iconH}px;object-fit:contain;display:block;`;
+          domImgEl = img;
+          rotator.appendChild(img);
+          outer.appendChild(rotator);
+          rotatorEl = rotator;
+
+          if (this.host.hasMapId && this.googleMaps.marker?.AdvancedMarkerElement) {
+            outer.style.transform = "translateY(50%)";
+            newMarker = new this.googleMaps.marker.AdvancedMarkerElement({
+              position: { lat: trip.profile.pts[0][1], lng: trip.profile.pts[0][2] },
+              map: show ? this.map : null,
+              title: markerTitle,
+              content: outer,
+              zIndex: 250
+            });
+          } else {
+            newMarker = this.host.domMarkerLayer.addMarker(
+              { lat: trip.profile.pts[0][1], lng: trip.profile.pts[0][2] },
+              outer,
+              markerTitle
+            );
+            newMarker.setVisible(show);
           }
-          newMarker = new this.googleMaps.marker.AdvancedMarkerElement({
-            position: { lat: trip.profile.pts[0][1], lng: trip.profile.pts[0][2] },
-            map: show ? this.map : null,
-            title: markerTitle,
-            content: wrapper,
-            zIndex: 250
-          });
         } else {
           newMarker = new this.googleMaps.Marker({
             position: new this.googleMaps.LatLng(trip.profile.pts[0][1], trip.profile.pts[0][2]),
@@ -754,6 +845,25 @@ export class TransitMotionEngine {
           });
         }
         this.scheduledMarkers.set(trip.key, newMarker);
+        this.activeTrips.set(trip.key, {
+          pts: trip.profile.pts,
+          startSec: trip.startSec,
+          simOffset: trip.simOffset,
+          lineKey: trip.lineKey,
+          shouldRotate,
+          rotatorEl,
+          lastBearing: prevTrip?.lastBearing
+        });
+      } else {
+        this.activeTrips.set(trip.key, {
+          pts: trip.profile.pts,
+          startSec: trip.startSec,
+          simOffset: trip.simOffset,
+          lineKey: trip.lineKey,
+          shouldRotate,
+          rotatorEl: prevTrip?.rotatorEl,
+          lastBearing: prevTrip?.lastBearing
+        });
       }
     }
 
@@ -825,15 +935,15 @@ export class TransitMotionEngine {
         if (inView) {
           if (typeof marker.setPosition === "function") marker.setPosition(latLng);
           else marker.position = { lat: coord.lat, lng: coord.lng };
-          if (coord.bearing !== undefined && (trip.lastBearing === undefined || Math.abs(coord.bearing - trip.lastBearing) > 0.5)) {
+          if (
+            trip.shouldRotate &&
+            coord.bearing !== undefined &&
+            (trip.lastBearing === undefined || Math.abs(coord.bearing - trip.lastBearing) > 0.5)
+          ) {
             trip.lastBearing = coord.bearing;
-            if (marker.content && marker.content.style) {
-              marker.content.style.transform = `rotate(${coord.bearing.toFixed(1)}deg)`;
-            } else if (typeof marker.getIcon === "function" && typeof marker.setIcon === "function") {
-              const curIcon = marker.getIcon();
-              if (curIcon && typeof curIcon === "object" && "path" in curIcon) {
-                marker.setIcon({ ...curIcon, rotation: coord.bearing });
-              }
+            const rotTarget = trip.rotatorEl || marker.content;
+            if (rotTarget && rotTarget.style) {
+              rotTarget.style.transform = `rotate(${coord.bearing.toFixed(1)}deg)`;
             }
           }
           if (typeof marker.getMap === "function" && !marker.getMap()) marker.setMap(this.map);

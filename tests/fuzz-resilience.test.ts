@@ -186,10 +186,24 @@ describe("Malformed GTFS Schedule & GeoJSON Resilience", () => {
         }
       }
     });
-    const icon = getTransitVehicleIcon(fakeGoogleMaps, "red_line", cfg.transitMotion, "subway", undefined, undefined, 135);
-    expect(icon.path).toBe(1);
-    expect(icon.fillColor).toBe("#D32F2F");
-    expect(icon.rotation).toBe(135);
+    const icon = getTransitVehicleIcon(fakeGoogleMaps, "red_line", cfg.transitMotion, "subway");
+    expect(typeof icon.url).toBe("string");
+    const decodedTri = decodeURIComponent(icon.url);
+    expect(decodedTri).toContain("<polygon points='12,0.75 23.25,23.25 0.75,23.25'");
+    expect(decodedTri).toContain("fill='#D32F2F'");
+
+    const arrowCfg = normalizeCardConfig({
+      api_key: "test",
+      transit_motion: {
+        shape: "arrow",
+        routes: {
+          red_line: { color: "#D32F2F", icon_size: 24 }
+        }
+      }
+    });
+    const arrowIcon = getTransitVehicleIcon(fakeGoogleMaps, "red_line", arrowCfg.transitMotion, "subway");
+    const decodedArrow = decodeURIComponent(arrowIcon.url);
+    expect(decodedArrow).toContain("<polygon points='12,0.75 23.25,23.25 12,17 0.75,23.25'");
 
     const triSvg = buildTriangleSvgDataUrl({ size: 24, fillColor: "#D32F2F" });
     expect(decodeURIComponent(triSvg)).toContain("<polygon points='12,2 21,21 12,17 3,21'");

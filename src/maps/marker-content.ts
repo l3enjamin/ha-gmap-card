@@ -48,6 +48,8 @@ export function createMarkerElement(
   `;
 
   const iconSize = entityConfig.iconSize || 32;
+  const markerW = entityConfig.width || (entityConfig.markerType === "rectangle" ? Math.round(iconSize * 1.4) : iconSize);
+  const markerH = entityConfig.height || entityConfig.pictureHeight || iconSize;
   const bg = entityConfig.backgroundColor || "#ffffff";
   const defaultBorder = isDark ? "rgba(255, 255, 255, 0.35)" : "rgba(0, 0, 0, 0.25)";
   const borderColor = entityConfig.borderColor || defaultBorder;
@@ -55,13 +57,13 @@ export function createMarkerElement(
   const customIconSvgUrl = entityConfig.icon ? resolveCustomIconUrl(entityConfig.icon) : null;
   const picture = resolveEntityPicture(entityConfig, stateObj) || customIconSvgUrl || undefined;
 
-  if ((mType === "circle" && !picture) || entityConfig.showIcon === false) {
-    const dotSize = entityConfig.iconSize || 10;
+  if ((mType === "circle" && !picture) || (entityConfig.showIcon === false && (!mType || mType === "circle"))) {
+    const dotSize = entityConfig.width || entityConfig.height || entityConfig.iconSize || 10;
     const dot = document.createElement("div");
     dot.className = "ha-gmap-marker-circle";
     dot.style.cssText = `
-      width: ${dotSize}px;
-      height: ${dotSize}px;
+      width: ${entityConfig.width || dotSize}px;
+      height: ${entityConfig.height || dotSize}px;
       border-radius: 50%;
       background: ${entityConfig.backgroundColor || "#1E88E5"};
       border: ${entityConfig.borderWidth ?? 1}px solid ${entityConfig.borderColor || "#ffffff"};
@@ -69,7 +71,35 @@ export function createMarkerElement(
       box-sizing: border-box;
     `;
     container.appendChild(dot);
-  } else if (picture && mType !== "icon") {
+  } else if (mType === "triangle" || mType === "arrow") {
+    const bw = entityConfig.borderWidth ?? 1.5;
+    const fill = entityConfig.backgroundColor || "#1E88E5";
+    const stroke = entityConfig.borderColor || "#ffffff";
+    const clip =
+      mType === "triangle"
+        ? "polygon(50% 0%, 100% 100%, 0% 100%)"
+        : "polygon(50% 0%, 100% 100%, 50% 72%, 0% 100%)";
+    const shapeWrap = document.createElement("div");
+    shapeWrap.style.cssText = `
+      width: ${markerW}px;
+      height: ${markerH}px;
+      background: ${fill};
+      clip-path: ${clip};
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      border: ${bw}px solid ${stroke};
+    `;
+    if (picture && entityConfig.showIcon !== false) {
+      const innerImg = document.createElement("img");
+      innerImg.src = picture;
+      const innerSz = Math.max(8, Math.round(Math.min(markerW, markerH) * 0.45));
+      innerImg.style.cssText = `width:${innerSz}px;height:${innerSz}px;margin-top:${Math.round(markerH * 0.25)}px;object-fit:contain;display:block;`;
+      shapeWrap.appendChild(innerImg);
+    }
+    container.appendChild(shapeWrap);
+  } else if (picture && mType !== "icon" && entityConfig.showIcon !== false) {
     const isRectOrAuto =
       entityConfig.pictureShape === "auto" ||
       entityConfig.pictureShape === "rectangle" ||
@@ -81,14 +111,22 @@ export function createMarkerElement(
     const img = document.createElement("img");
     img.src = picture;
 
-    if (isRectOrAuto) {
-      const h = entityConfig.pictureHeight || iconSize || 28;
-      const maxW = entityConfig.pictureMaxWidth || 120;
+    if (mType === "none") {
+      img.style.cssText = `
+        width: ${markerW}px;
+        height: ${markerH}px;
+        object-fit: contain;
+        display: block;
+      `;
+    } else if (isRectOrAuto) {
+      const h = entityConfig.height || entityConfig.pictureHeight || iconSize || 28;
+      const wCss = entityConfig.width ? `${entityConfig.width}px` : "auto";
+      const maxW = entityConfig.pictureMaxWidth || (entityConfig.width ? entityConfig.width : 120);
       const br = entityConfig.pictureBorderRadius ?? 8;
       const bw = entityConfig.borderWidth ?? 1;
       const pad = entityConfig.picturePadding ?? 2;
       img.style.cssText = `
-        width: auto;
+        width: ${wCss};
         height: ${h}px;
         max-width: ${maxW}px;
         border-radius: ${br}px;
@@ -110,12 +148,14 @@ export function createMarkerElement(
         !entityConfig.backgroundColor &&
         !entityConfig.borderColor &&
         entityConfig.picturePadding === undefined &&
-        entityConfig.pictureBorderRadius === undefined;
+        entityConfig.pictureBorderRadius === undefined &&
+        entityConfig.width === undefined &&
+        entityConfig.height === undefined;
 
       if (isVectorSvg) {
         img.style.cssText = `
-          width: ${iconSize}px;
-          height: ${iconSize}px;
+          width: ${markerW}px;
+          height: ${markerH}px;
           object-fit: contain;
           display: block;
         `;
@@ -124,8 +164,8 @@ export function createMarkerElement(
         const bw = entityConfig.borderWidth ?? 2;
         const pad = entityConfig.picturePadding ?? 2;
         img.style.cssText = `
-          width: ${iconSize}px;
-          height: ${iconSize}px;
+          width: ${markerW}px;
+          height: ${markerH}px;
           border-radius: ${br};
           border: ${bw}px solid ${borderColor};
           background: ${bg};
@@ -139,7 +179,7 @@ export function createMarkerElement(
     }
     container.appendChild(img);
   } else {
-    const iconName = entityConfig.icon || stateObj?.attributes?.icon;
+    const iconName = entityConfig.showIcon === false ? undefined : (entityConfig.icon || stateObj?.attributes?.icon);
     const badge = document.createElement("div");
     const br = mType === "square" || mType === "rectangle" ? `${entityConfig.pictureBorderRadius ?? 6}px` : "50%";
     const badgeBg = entityConfig.backgroundColor || "var(--primary-color, #1a73e8)";
@@ -147,8 +187,8 @@ export function createMarkerElement(
     const badgeBorderWidth = entityConfig.borderWidth ?? 2;
 
     badge.style.cssText = `
-      width: ${iconSize}px;
-      height: ${iconSize}px;
+      width: ${markerW}px;
+      height: ${markerH}px;
       border-radius: ${br};
       background: ${badgeBg};
       border: ${badgeBorderWidth}px solid ${badgeBorderColor};
@@ -157,20 +197,22 @@ export function createMarkerElement(
       align-items: center;
       justify-content: center;
       color: #ffffff;
-      font-size: ${Math.max(10, Math.round(iconSize * 0.42))}px;
+      font-size: ${Math.max(10, Math.round(Math.min(markerW, markerH) * 0.42))}px;
       font-weight: 700;
       box-sizing: border-box;
     `;
 
-    if (iconName && typeof iconName === "string") {
-      const haIcon = document.createElement("ha-icon");
-      haIcon.setAttribute("icon", iconName);
-      const glyphSize = Math.max(12, Math.round(iconSize * 0.6));
-      (haIcon.style as any).cssText = `--mdc-icon-size: ${glyphSize}px; width: ${glyphSize}px; height: ${glyphSize}px; color: #ffffff; pointer-events: none;`;
-      badge.appendChild(haIcon);
-    } else {
-      const initial = (entityConfig.name || stateObj?.attributes?.friendly_name || "?").charAt(0).toUpperCase();
-      badge.textContent = initial;
+    if (entityConfig.showIcon !== false) {
+      if (iconName && typeof iconName === "string") {
+        const haIcon = document.createElement("ha-icon");
+        haIcon.setAttribute("icon", iconName);
+        const glyphSize = Math.max(12, Math.round(Math.min(markerW, markerH) * 0.6));
+        (haIcon.style as any).cssText = `--mdc-icon-size: ${glyphSize}px; width: ${glyphSize}px; height: ${glyphSize}px; color: #ffffff; pointer-events: none;`;
+        badge.appendChild(haIcon);
+      } else {
+        const initial = (entityConfig.name || stateObj?.attributes?.friendly_name || "?").charAt(0).toUpperCase();
+        badge.textContent = initial;
+      }
     }
 
     container.appendChild(badge);
