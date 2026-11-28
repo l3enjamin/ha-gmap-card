@@ -26,9 +26,17 @@ import {
   recordRenameKey,
   ROUTE_LABEL_SHAPES
 } from "./helpers";
+import {
+  applyGtfsRouteToConfig,
+  createInitialGtfsState,
+  GtfsEditorState,
+  GtfsExportedRouteMeta,
+  GtfsExportResponse
+} from "./gtfs-helpers";
+import { renderGtfsTab } from "./gtfs-panel";
 import { editorStyles } from "./styles";
 
-type EditorTab = "global" | "entities" | "geojson" | "transit" | "filters";
+type EditorTab = "global" | "entities" | "geojson" | "transit" | "filters" | "gtfs";
 type EditorSubView =
   | null
   | { kind: "entity"; index: number }
@@ -84,6 +92,8 @@ export class HaGmapCardEditor extends LitElement {
   private _yamlSeedValue: any = undefined;
   private _cachedStatesRef: any = null;
   private _cachedEntityIds: string[] = [];
+  private _gtfs: GtfsEditorState = createInitialGtfsState();
+  private _gtfsSearchTimer: any = null;
 
   static properties = {
     hass: { attribute: false },
@@ -91,7 +101,8 @@ export class HaGmapCardEditor extends LitElement {
     _activeTab: { state: true },
     _subView: { state: true },
     _popupCardError: { state: true },
-    _yamlEditorReady: { state: true }
+    _yamlEditorReady: { state: true },
+    _gtfs: { state: true }
   };
 
   public hass: any;
@@ -104,6 +115,14 @@ export class HaGmapCardEditor extends LitElement {
       customElements.whenDefined("ha-yaml-editor").then(() => {
         this._yamlEditorReady = true;
       });
+    }
+  }
+
+  public disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._gtfsSearchTimer) {
+      clearTimeout(this._gtfsSearchTimer);
+      this._gtfsSearchTimer = null;
     }
   }
 
@@ -127,6 +146,104 @@ export class HaGmapCardEditor extends LitElement {
     this._activeTab = tab;
     this._subView = null;
     this._popupCardError = null;
+    if (tab === "gtfs" && !this._gtfs.sourcesLoaded && !this._gtfs.loadingSources && this.hass?.callWS) {
+      void this.loadGtfsSources();
+    }
+  }
+
+  private patchGtfs(patch: Partial<GtfsEditorState>) {
+    this._gtfs = { ...this._gtfs, ...patch };
+  }
+
+  private async loadGtfsSources() {
+    if (!this.hass?.callWS) return;
+    this.patchGtfs({ loadingSources: true, error: null });
+    try {
+      const res: any = await this.hass.callWS({
+        type: "ha_gmap/list_sources",
+        output_dir: this._gtfs.outputDir || "gtfs2"
+      });
+      const sources = Array.isArray(res?.sources) ? res.sources : [];
+      const nextSource = this._gtfs.source || sources[0]?.path || "";
+      this.patchGtfs({
+        sources,
+        sourcesLoaded: true,
+        loadingSources: false,
+        backendMissing: false,
+        source: nextSource,
+        existingScheduleUrl: res?.existing_schedule_url || null,
+        existingRoutes: res?.existing_routes || {}
+      });
+      if (nextSource && !this._gtfs.routesLoaded) {
+        void this.loadGtfsRoutes(nextSource);
+      }
+    } catch (err: any) {
+      const isMissing = err?.code === "unknown_command" || /unknown command/i.test(String(err?.message || ""));
+      this.patchGtfs({
+        loadingSources: false,
+        sourcesLoaded: true,
+        backendMissing: isMissing,
+        error: isMissing ? null : err?.message || "Failed to list GTFS sources."
+      });
+    }
+  }
+
+  private async loadGtfsRoutes(explicitSource?: string) {
+    if (!this.hass?.callWS) return;
+    const src = (explicitSource ?? this._gtfs.source).trim();
+    if (!src) return;
+    this.patchGtfs({ loadingRoutes: true, error: null });
+    try {
+      const res: any = await this.hass.callWS({
+        type: "ha_gmap/list_routes",
+        source: src,
+        query: this._gtfs.query.trim(),
+        route_types: this._gtfs.routeTypeFilter ? [this._gtfs.routeTypeFilter] : [],
+        limit: 400
+      });
+      this.patchGtfs({
+        routes: Array.isArray(res?.routes) ? res.routes : [],
+        totalRoutes: Number(res?.total ?? 0),
+        loadingRoutes: false,
+        routesLoaded: true,
+        backendMissing: false
+      });
+    } catch (err: any) {
+      const isMissing = err?.code === "unknown_command" || /unknown command/i.test(String(err?.message || ""));
+      this.patchGtfs({
+        loadingRoutes: false,
+        backendMissing: isMissing,
+        error: isMissing ? null : err?.message || "Failed to load routes from GTFS source."
+      });
+    }
+  }
+
+  private async runGtfsExport() {
+    if (!this.hass?.callWS) return;
+    const src = this._gtfs.source.trim();
+    if (!src) return;
+    this.patchGtfs({ exporting: true, error: null });
+    try {
+      const res = (await this.hass.callWS({
+        type: "ha_gmap/export",
+        source: src,
+        output_dir: this._gtfs.outputDir || "gtfs2",
+        route_types: this._gtfs.routeTypeFilter ? [this._gtfs.routeTypeFilter] : [],
+        route_filter: this._gtfs.selectedRouteIds,
+        merge_existing: this._gtfs.mergeExisting
+      })) as GtfsExportResponse;
+      this.patchGtfs({
+        exporting: false,
+        lastExport: res,
+        backendMissing: false
+      });
+      void this.loadGtfsSources();
+    } catch (err: any) {
+      this.patchGtfs({
+        exporting: false,
+        error: err?.message || "GTFS export failed."
+      });
+    }
   }
 
   private updateTopField(key: string, value: any, removeAliases?: string[]) {
@@ -195,7 +312,8 @@ export class HaGmapCardEditor extends LitElement {
       { id: "entities", label: `Entities (${Array.isArray(this._config.entities) ? this._config.entities.length : 0})` },
       { id: "geojson", label: `GeoJSON (${Array.isArray(this._config.geojson_layers) ? this._config.geojson_layers.length : 0})` },
       { id: "transit", label: "Transit" },
-      { id: "filters", label: "Filters" }
+      { id: "filters", label: "Filters" },
+      { id: "gtfs", label: "GTFS" }
     ];
 
     return html`
@@ -239,6 +357,28 @@ export class HaGmapCardEditor extends LitElement {
         return this._subView?.kind === "filterGroup"
           ? this.renderFilterGroupDetail(this._subView.key)
           : this.renderFiltersMaster();
+      case "gtfs":
+        return renderGtfsTab({
+          state: this._gtfs,
+          config: this._config,
+          hassAvailable: Boolean(this.hass?.callWS),
+          onPatchState: (p) => this.patchGtfs(p),
+          onRefreshSources: () => void this.loadGtfsSources(),
+          onLoadRoutes: () => void this.loadGtfsRoutes(),
+          onSearchInput: (query) => {
+            this.patchGtfs({ query });
+            if (this._gtfsSearchTimer) clearTimeout(this._gtfsSearchTimer);
+            this._gtfsSearchTimer = setTimeout(() => {
+              if (this._gtfs.source.trim()) void this.loadGtfsRoutes();
+            }, 300);
+          },
+          onExport: () => void this.runGtfsExport(),
+          onSetScheduleUrl: (url) => this.updateNestedSection("transit_motion", "schedule_url", url, ["scheduleUrl"], "transitMotion"),
+          onWireRoute: (lineKey: string, meta: GtfsExportedRouteMeta, opts) => {
+            const schedUrl = this._gtfs.lastExport?.schedule_url || this._gtfs.existingScheduleUrl || undefined;
+            this.emitConfig(applyGtfsRouteToConfig(this._config, lineKey, meta, schedUrl, opts));
+          }
+        });
     }
   }
 

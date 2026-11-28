@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { normalizeCardConfig } from "../src/config/schema";
 import {
+  applyGtfsRouteToConfig,
+  buildGeoLayerFromGtfsRoute,
+  buildTransitRouteFromGtfsRoute
+} from "../src/editor/gtfs-helpers";
+import {
   arrayAdd,
   arrayDuplicate,
   arrayMove,
@@ -183,5 +188,65 @@ describe("Editor Config Helpers", () => {
     });
     expect(MARKER_SHAPES).toEqual(["circle", "square", "rectangle", "triangle", "arrow", "none"]);
     expect(ROUTE_LABEL_SHAPES).toEqual(["rectangle", "square", "circle"]);
+  });
+
+  it("wires exported GTFS routes into geojson_layers and transit_motion.routes idempotently", () => {
+    const busMeta = {
+      label: "Broadway B-Line",
+      shortName: "099",
+      color: "#d04110",
+      routeType: 3,
+      geojsonUrl: "/local/gtfs2/route_99.geojson"
+    };
+    const railMeta = {
+      label: "Canada Line",
+      shortName: "Canada Line",
+      color: "#0097A9",
+      routeType: 1,
+      geojsonUrl: "/local/gtfs2/route_canada_line.geojson"
+    };
+
+    expect(buildGeoLayerFromGtfsRoute("99", busMeta)).toMatchObject({
+      url: "/local/gtfs2/route_99.geojson",
+      label: "099",
+      route_key: "99",
+      stroke_color: "#d04110",
+      stroke_width: 3,
+      filter_group: "bus"
+    });
+    expect(buildTransitRouteFromGtfsRoute("canada", railMeta)).toMatchObject({
+      label: "Canada Line",
+      color: "#0097A9",
+      icon: "mdi:subway-variant"
+    });
+
+    let cfg: Record<string, any> = { api_key: "test" };
+    cfg = applyGtfsRouteToConfig(cfg, "99", busMeta, "/local/gtfs2/transit_schedule.json", {
+      addGeoJson: true,
+      addAnimation: true
+    });
+    expect(cfg.geojson_layers.length).toBe(1);
+    expect(cfg.transit_motion.schedule_url).toBe("/local/gtfs2/transit_schedule.json");
+    expect(cfg.transit_motion.routes["99"].icon).toBe("cli:translink-bus");
+
+    // Repeating is idempotent and preserves existing custom schedule_url
+    const cfgCustomSched = {
+      ...cfg,
+      transit_motion: { ...cfg.transit_motion, schedule_url: "/local/custom/sched.json" }
+    };
+    const cfg2 = applyGtfsRouteToConfig(cfgCustomSched, "99", busMeta, "/local/gtfs2/transit_schedule.json", {
+      addGeoJson: true,
+      addAnimation: true
+    });
+    expect(cfg2.geojson_layers.length).toBe(1);
+    expect(cfg2.transit_motion.schedule_url).toBe("/local/custom/sched.json");
+
+    // Adding second rail route appends cleanly
+    const cfg3 = applyGtfsRouteToConfig(cfg2, "canada", railMeta, "/local/gtfs2/transit_schedule.json", {
+      addGeoJson: true,
+      addAnimation: true
+    });
+    expect(cfg3.geojson_layers.length).toBe(2);
+    expect(cfg3.transit_motion.routes.canada.color).toBe("#0097A9");
   });
 });

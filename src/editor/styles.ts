@@ -323,4 +323,33 @@ export const editorStyles = css`
     font-style: italic;
     padding: 6px 2px;
   }
+
+  .gtfs-route-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 270px;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .info-banner {
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    background: rgba(3, 169, 244, 0.12);
+    border: 1px solid rgba(3, 169, 244, 0.35);
+    color: var(--primary-text-color, #212121);
+  }
+
+  .warn-banner {
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    background: rgba(255, 152, 0, 0.14);
+    border: 1px solid rgba(255, 152, 0, 0.45);
+    color: var(--primary-text-color, #212121);
+  }
 `;

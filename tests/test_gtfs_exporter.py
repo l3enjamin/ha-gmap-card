@@ -2,7 +2,9 @@
 
 import io
 import json
+import os
 from pathlib import Path
+import sqlite3
 import sys
 import zipfile
 
@@ -89,6 +91,9 @@ def test_malformed_gtfs_zip_does_not_crash(tmp_path: Path):
 
 def test_parsers_handle_edge_values():
     assert parse_gtfs_time_seconds("25:15:00") == 25 * 3600 + 15 * 60
+    assert parse_gtfs_time_seconds("1970-01-01 09:58:00.000000") == 9 * 3600 + 58 * 60
+    assert parse_gtfs_time_seconds("1970-01-02 00:15:30.000000") == 24 * 3600 + 15 * 60 + 30
+    assert parse_gtfs_time_seconds("1970-01-05 00:15:30.000000") is None
     assert parse_gtfs_time_seconds("99:99:99") is None
     assert parse_gtfs_time_seconds("invalid") is None
     assert parse_coord("nan", "-123.1") is None
@@ -135,4 +140,68 @@ def test_slug_collision_and_route_filter_long_name(tmp_path: Path):
     # Explicit empty route_types=[] should not fall back to default rail types
     res_empty = export_gtfs(str(zip_path), str(tmp_path / "out_empty"), route_types=[])
     assert res_empty.routes_exported == 3
+
+
+def test_sqlite_datetime_export_and_merge_preserving_symlinks(tmp_path: Path):
+    db_path = tmp_path / "gtfs_test.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE routes (route_id TEXT, route_short_name TEXT, route_long_name TEXT, route_type INTEGER, route_color TEXT);
+        CREATE TABLE stops (stop_id TEXT, stop_name TEXT, stop_lat REAL, stop_lon REAL, location_type INTEGER, parent_station TEXT);
+        CREATE TABLE calendar (service_id TEXT, monday INTEGER, tuesday INTEGER, wednesday INTEGER, thursday INTEGER, friday INTEGER, saturday INTEGER, sunday INTEGER);
+        CREATE TABLE calendar_dates (service_id TEXT, date TEXT, exception_type INTEGER);
+        CREATE TABLE shapes (shape_id TEXT, shape_pt_lat REAL, shape_pt_lon REAL, shape_pt_sequence INTEGER);
+        CREATE TABLE trips (route_id TEXT, service_id TEXT, trip_id TEXT, trip_headsign TEXT, shape_id TEXT);
+        CREATE TABLE stop_times (trip_id TEXT, arrival_time TEXT, departure_time TEXT, stop_id TEXT, stop_sequence INTEGER);
+
+        INSERT INTO routes VALUES ('6641', '099', 'Broadway B-Line', 3, 'd04110');
+        INSERT INTO routes VALUES ('SKY1', 'Canada', 'Canada Line', 1, '0097A9');
+        INSERT INTO stops VALUES ('S1', 'Commercial-Broadway', 49.2625, -123.0689, 0, '');
+        INSERT INTO stops VALUES ('S2', 'UBC Exchange', 49.2674, -123.2468, 0, '');
+        INSERT INTO calendar VALUES ('1', 1, 1, 1, 1, 1, 0, 0);
+        INSERT INTO trips VALUES ('6641', '1', 'T99', '99 B-Line UBC', '');
+        INSERT INTO trips VALUES ('SKY1', '1', 'TSKY', 'Waterfront', '');
+        INSERT INTO stop_times VALUES ('T99', '1970-01-01 09:00:00.000000', '1970-01-01 09:00:00.000000', 'S1', 1);
+        INSERT INTO stop_times VALUES ('T99', '1970-01-01 09:30:00.000000', '1970-01-01 09:30:00.000000', 'S2', 2);
+        INSERT INTO stop_times VALUES ('TSKY', '1970-01-02 00:30:00.000000', '1970-01-02 00:30:00.000000', 'S1', 1);
+        INSERT INTO stop_times VALUES ('TSKY', '1970-01-02 00:45:00.000000', '1970-01-02 00:45:00.000000', 'S2', 2);
+        """
+    )
+    conn.close()
+
+    discovered = discover_routes_from_source(str(db_path))
+    assert len(discovered) == 2
+    assert discovered[0]["color"] in ("#d04110", "#0097A9")
+
+    out_dir = tmp_path / "www_merge"
+    out_dir.mkdir()
+    real_sched = out_dir / "skytrain_schedule.json"
+    real_sched.write_text(
+        json.dumps(
+            {
+                "profiles": [{"h": "Existing", "pts": [[0, 49.1, -123.1], [60, 49.2, -123.1]]}],
+                "trips": {"expo": {"1": [[28800, 0]]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_gz = out_dir / "skytrain_schedule.json.gz"
+    real_gz.write_bytes(b"")
+    os.symlink("skytrain_schedule.json", out_dir / "transit_schedule.json")
+    os.symlink("skytrain_schedule.json.gz", out_dir / "transit_schedule.json.gz")
+
+    res = export_gtfs(str(db_path), str(out_dir), route_types=[], route_filter=["6641"], merge_existing=True)
+    assert res.routes_exported == 1
+    assert res.trips_count == 1
+    assert res.routes_meta["broadway_b_line"]["color"] == "#d04110"
+    assert (out_dir / "transit_schedule.json").is_symlink()
+    assert (out_dir / "transit_schedule.json.gz").is_symlink()
+
+    merged = json.loads(real_sched.read_text(encoding="utf-8"))
+    assert "expo" in merged["trips"]
+    assert merged["trips"]["expo"]["1"] == [[28800, 0]]
+    assert merged["trips"]["broadway_b_line"]["1"] == [[9 * 3600, 1]]
+    assert len(merged["profiles"]) == 2
+
 

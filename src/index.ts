@@ -10,12 +10,14 @@ if (!customElements.get("ha-gmap-card-editor")) {
 
 // Register with Home Assistant Lovelace Card Picker
 (window as any).customCards = (window as any).customCards || [];
-(window as any).customCards.push({
-  type: "ha-gmap-card",
-  name: "Google Maps Card (Modern)",
-  description: "High-performance, lightweight vector Google Maps card with GTFS2 transit motion, custom markers, and filters.",
-  preview: true
-});
+if (!(window as any).customCards.some((c: any) => c?.type === "ha-gmap-card")) {
+  (window as any).customCards.push({
+    type: "ha-gmap-card",
+    name: "Google Maps Card (Modern)",
+    description: "High-performance, lightweight vector Google Maps card with GTFS2 transit motion, custom markers, and filters.",
+    preview: true
+  });
+}
 
 console.info(
   "%c HA-GMAP-CARD %c v1.0.0 ",

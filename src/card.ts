@@ -2,6 +2,7 @@ import { css, html, LitElement, PropertyValues } from "lit";
 import { CardEntityConfig, GeoJsonLayerConfig, NormalizedCardConfig, normalizeCardConfig } from "./config/schema";
 import { FilterController } from "./filters/controller";
 import { loadGoogleMaps } from "./maps/loader";
+import { generateRouteLabelsForGeoJson } from "./maps/geo-labels";
 import { BatchedDomMarkerLayer, createMarkerElement } from "./maps/marker-content";
 import { PopupController } from "./popup/controller";
 import {
@@ -729,70 +730,7 @@ export class HaGmapCard extends LitElement {
   }
 
   private prepareGeoJsonWithLabels(geoData: any, layerCfg: GeoJsonLayerConfig): any {
-    if (!geoData || !Array.isArray(geoData.features)) return geoData;
-    if (layerCfg.labelSpacing === undefined) return geoData;
-
-    const spacing = Math.max(50, layerCfg.labelSpacing);
-    const labelText = layerCfg.label || layerCfg.name || "";
-    const filteredFeatures = geoData.features.filter((f: any) => {
-      const p = f?.properties || {};
-      const pt = String(p.point_type || p.type || "").toLowerCase();
-      return pt !== "badge" && !p.badge;
-    });
-
-    if (layerCfg.showLabels === false || !labelText) {
-      return { ...geoData, features: filteredFeatures };
-    }
-
-    const generatedBadges: any[] = [];
-    const seenBuckets = new Set<string>();
-    const addLineCoords = (coords: any[], props: any) => {
-      if (!Array.isArray(coords) || coords.length < 2) return;
-      let accum = spacing * 0.5;
-      for (let i = 0; i < coords.length - 1; i++) {
-        const a = coords[i];
-        const b = coords[i + 1];
-        if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) continue;
-        const segLen = haversineMeters(a[1], a[0], b[1], b[0]);
-        if (!Number.isFinite(segLen) || segLen <= 0) continue;
-        let walked = 0;
-        while (accum + (segLen - walked) >= spacing) {
-          const need = spacing - accum;
-          const frac = (walked + need) / segLen;
-          const lng = a[0] + (b[0] - a[0]) * frac;
-          const lat = a[1] + (b[1] - a[1]) * frac;
-          const bucketKey = `${Math.round(lat * 500)},${Math.round(lng * 500)}`;
-          if (!seenBuckets.has(bucketKey)) {
-            seenBuckets.add(bucketKey);
-            generatedBadges.push({
-              type: "Feature",
-              geometry: { type: "Point", coordinates: [lng, lat] },
-              properties: {
-                point_type: "badge",
-                badge: labelText,
-                name: labelText,
-                color: props?.color || props?.strokeColor || layerCfg.strokeColor
-              }
-            });
-          }
-          walked += need;
-          accum = 0;
-        }
-        accum += segLen - walked;
-      }
-    };
-
-    for (const f of filteredFeatures) {
-      const geom = f?.geometry;
-      if (!geom) continue;
-      if (geom.type === "LineString") {
-        addLineCoords(geom.coordinates, f.properties);
-      } else if (geom.type === "MultiLineString" && Array.isArray(geom.coordinates)) {
-        for (const line of geom.coordinates) addLineCoords(line, f.properties);
-      }
-    }
-
-    return { ...geoData, features: [...filteredFeatures, ...generatedBadges] };
+    return generateRouteLabelsForGeoJson(geoData, layerCfg);
   }
 
   private computeGeoFeatureStyle(dataLayer: any, feature: any, layerCfg: GeoJsonLayerConfig) {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
+from datetime import date, datetime
 import gzip
 import io
 import json
@@ -41,23 +42,45 @@ class GtfsExportResult:
     trips_count: int = 0
     schedule_path: str | None = None
     geojson_paths: list[str] = field(default_factory=list)
+    routes_meta: dict[str, dict[str, Any]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
+_SQLITE_DT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$")
+
+
 def parse_gtfs_time_seconds(val: Any) -> int | None:
-    """Parse GTFS HH:MM:SS (supporting >24h service hours) into seconds, or None if invalid."""
+    """Parse GTFS HH:MM:SS (>24h supported) or SQLite datetime strings into seconds."""
     if val is None:
         return None
     s = str(val).strip()
     if not s:
         return None
+    dt_match = _SQLITE_DT_RE.match(s)
+    if dt_match:
+        d_str, hh_s, mm_s, ss_s = dt_match.groups()
+        try:
+            day_delta = (date.fromisoformat(d_str) - date(1970, 1, 1)).days
+            hh = int(hh_s)
+            mm = int(mm_s)
+            ss = int(ss_s) if ss_s is not None else 0
+        except ValueError:
+            return None
+        if day_delta < 0 or day_delta > 1 or hh < 0 or hh > 23 or mm < 0 or mm >= 60 or ss < 0 or ss >= 60:
+            return None
+        return day_delta * 86400 + hh * 3600 + mm * 60 + ss
+
     parts = s.split(":")
     if len(parts) < 2 or len(parts) > 3:
         return None
     try:
         hh = int(parts[0])
         mm = int(parts[1])
-        ss = int(parts[2]) if len(parts) == 3 else 0
+        if len(parts) == 3:
+            sec_raw = parts[2].split(".", 1)[0]
+            ss = int(sec_raw)
+        else:
+            ss = 0
     except ValueError:
         return None
     if hh < 0 or hh > 48 or mm < 0 or mm >= 60 or ss < 0 or ss >= 60:
@@ -101,16 +124,19 @@ def normalize_hex_color(raw: Any, fallback: str = "#1E88E5") -> str:
 
 
 def _atomic_write_text(path: Path, text: str, also_gzip: bool = True) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    target = path.resolve() if path.is_symlink() else path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    os.replace(tmp, target)
     if also_gzip:
         gz_path = Path(str(path) + ".gz")
-        gz_tmp = Path(str(path) + ".gz.tmp")
+        gz_target = gz_path.resolve() if gz_path.is_symlink() else gz_path
+        gz_target.parent.mkdir(parents=True, exist_ok=True)
+        gz_tmp = Path(str(gz_target) + ".tmp")
         with gzip.open(gz_tmp, "wt", encoding="utf-8") as gz_f:
             gz_f.write(text)
-        os.replace(gz_tmp, gz_path)
+        os.replace(gz_tmp, gz_target)
 
 
 def _iter_csv_from_zip(zf: zipfile.ZipFile, filename: str):
@@ -244,8 +270,16 @@ def _stream_stop_times(
     return stop_times_by_trip
 
 
+def _route_sort_key(item: dict[str, str]) -> tuple[int, int, str, str]:
+    short_n = item.get("short_name") or item.get("id") or ""
+    num_match = re.match(r"^(\d+)", short_n.lstrip("0") or short_n)
+    if num_match:
+        return (0, int(num_match.group(1)), short_n.lower(), item.get("label", "").lower())
+    return (1, 0, short_n.lower(), item.get("label", "").lower())
+
+
 def discover_routes_from_source(source_path: str) -> list[dict[str, str]]:
-    """Return lightweight route summaries [{id, label, route_type}] from a GTFS zip or sqlite."""
+    """Return route summaries from a GTFS zip or sqlite sorted naturally."""
     p = Path(source_path)
     if not p.exists():
         return []
@@ -254,7 +288,11 @@ def discover_routes_from_source(source_path: str) -> list[dict[str, str]]:
         try:
             conn = _open_sqlite_ro(p)
             try:
-                rows = _read_sqlite_table(conn, "routes", "route_id, route_short_name, route_long_name, route_type")
+                rows = _read_sqlite_table(
+                    conn, "routes", "route_id, route_short_name, route_long_name, route_type, route_color"
+                )
+                if not rows:
+                    rows = _read_sqlite_table(conn, "routes", "route_id, route_short_name, route_long_name, route_type")
             finally:
                 conn.close()
         except Exception:
@@ -267,14 +305,39 @@ def discover_routes_from_source(source_path: str) -> list[dict[str, str]]:
             return []
 
     out: list[dict[str, str]] = []
+    used_keys: set[str] = set()
     for r in rows:
         rid = str(r.get("route_id") or "").strip()
         if not rid:
             continue
         short_n = str(r.get("route_short_name") or "").strip()
         long_n = str(r.get("route_long_name") or "").strip()
+        rtype_str = str(r.get("route_type") or "").strip()
+        try:
+            rtype_int = int(rtype_str) if rtype_str else 3
+        except ValueError:
+            rtype_int = 3
+        mode = MODE_NAMES.get(rtype_int, "bus")
+        color = normalize_hex_color(r.get("route_color"))
         label = f"{short_n} - {long_n}".strip(" -") if short_n and long_n else (long_n or short_n or rid)
-        out.append({"id": rid, "label": label, "route_type": str(r.get("route_type") or "")})
+        lk = slugify_route_key(rid, short_n, long_n)
+        if lk in used_keys:
+            rid_slug = re.sub(r"[^a-z0-9]+", "_", rid.lower()).strip("_") or "dup"
+            lk = f"{lk}_{rid_slug}"
+        used_keys.add(lk)
+        out.append(
+            {
+                "id": rid,
+                "short_name": short_n or rid,
+                "long_name": long_n or label,
+                "label": label,
+                "route_type": rtype_str,
+                "mode": mode,
+                "color": color,
+                "line_key": lk,
+            }
+        )
+    out.sort(key=_route_sort_key)
     return out
 
 
@@ -302,8 +365,6 @@ def _classify_service_ids(
             sunday.add(sid)
 
     # Fallback: infer from calendar_dates.txt (exception_type == 1) when calendar.txt has gaps
-    from datetime import datetime
-
     for row in calendar_date_rows:
         sid = str(row.get("service_id") or "").strip()
         exc = str(row.get("exception_type") or "1").strip()
@@ -334,6 +395,7 @@ def export_gtfs(
     route_types: list[int | str] | None = None,
     route_filter: list[str] | None = None,
     url_prefix: str = "/local/gtfs2",
+    merge_existing: bool = False,
 ) -> GtfsExportResult:
     """Export static GTFS schedules and route GeoJSONs into `output_dir`."""
     result = GtfsExportResult()
@@ -588,16 +650,67 @@ def export_gtfs(
         }
         result.routes_exported += 1
 
-    # 8. Write transit_schedule.json (+ .gz)
-    schedule_payload = {
-        "profiles": profiles,
-        "trips": trips_out,
-        "routes": routes_meta_out,
-        "service_ids": service_ids,
-    }
+    # 8. Write transit_schedule.json (+ .gz), optionally merging into existing schedule
     sched_file = out_path / "transit_schedule.json"
+    final_profiles = profiles
+    final_trips = trips_out
+    final_routes_meta = routes_meta_out
+    final_service_ids: dict[str, list[str]] | None = service_ids
+
+    if merge_existing and sched_file.exists():
+        try:
+            existing = json.loads(sched_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+
+        if isinstance(existing, dict):
+            ex_profiles = existing.get("profiles") if isinstance(existing.get("profiles"), list) else []
+            ex_trips = existing.get("trips") if isinstance(existing.get("trips"), dict) else {}
+            ex_routes = existing.get("routes") if isinstance(existing.get("routes"), dict) else {}
+            ex_sids = existing.get("service_ids") if isinstance(existing.get("service_ids"), dict) else None
+
+            offset = len(ex_profiles)
+            final_profiles = list(ex_profiles) + list(profiles)
+            merged_trips: dict[str, dict[str, list[list[int]]]] = {
+                lk: lmap for lk, lmap in ex_trips.items() if lk not in trips_out
+            }
+            for lk, lmap in trips_out.items():
+                merged_trips[lk] = {
+                    sid: [[int(t[0]), int(t[1]) + offset] for t in tlist]
+                    for sid, tlist in lmap.items()
+                }
+            final_trips = merged_trips
+            final_routes_meta = {**ex_routes, **routes_meta_out}
+
+            uses_non_canonical = any(
+                sid not in ("1", "2", "3")
+                for lmap in final_trips.values()
+                if isinstance(lmap, dict)
+                for sid in lmap
+            )
+            if ex_sids is not None or uses_non_canonical:
+                ex_sids = ex_sids or {}
+                merged_sids: dict[str, list[str]] = {}
+                for bucket, canon in (("weekday", "1"), ("saturday", "2"), ("sunday", "3")):
+                    s_set = set(ex_sids.get(bucket) or []) | set(service_ids.get(bucket) or [])
+                    if any(isinstance(lmap, dict) and canon in lmap for lmap in ex_trips.values()):
+                        s_set.add(canon)
+                    merged_sids[bucket] = sorted(s_set)
+                final_service_ids = merged_sids
+            else:
+                final_service_ids = None
+
+    schedule_payload: dict[str, Any] = {
+        "profiles": final_profiles,
+        "trips": final_trips,
+        "routes": final_routes_meta,
+    }
+    if final_service_ids is not None:
+        schedule_payload["service_ids"] = final_service_ids
+
     _atomic_write_text(sched_file, json.dumps(schedule_payload, separators=(",", ":")))
 
-    result.profiles_count = len(profiles)
+    result.routes_meta = dict(routes_meta_out)
+    result.profiles_count = len(final_profiles)
     result.schedule_path = str(sched_file)
     return result
